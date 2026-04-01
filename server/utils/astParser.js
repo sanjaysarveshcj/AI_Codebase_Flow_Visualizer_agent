@@ -307,20 +307,55 @@ function extractFunctionDefinitions(ast, targetPath, filePath) {
 
   traverse(ast, {
     FunctionDeclaration(pathNode) {
+      const parentType = pathNode.parentPath?.node?.type;
+      const isTopLevel = parentType === "Program" || parentType === "ExportNamedDeclaration";
+
+      if (!isTopLevel) {
+        return;
+      }
+
       pushDefinition(pathNode.node.id?.name, pathNode.node.loc?.start?.line);
     },
     VariableDeclarator(pathNode) {
       const node = pathNode.node;
       const isFunctionLike =
         node.init?.type === "ArrowFunctionExpression" || node.init?.type === "FunctionExpression";
+      const isTopLevel = pathNode.scope?.block?.type === "Program";
 
-      if (isFunctionLike && node.id?.type === "Identifier") {
+      if (isTopLevel && isFunctionLike && node.id?.type === "Identifier") {
         pushDefinition(node.id.name, node.loc?.start?.line);
       }
     },
   });
 
   return definitions;
+}
+
+function extractFunctionInvocations(ast, targetPath, filePath) {
+  const invocations = [];
+
+  traverse(ast, {
+    CallExpression(pathNode) {
+      const callNode = pathNode.node;
+      const calleeName = getCallName(callNode.callee);
+
+      if (!calleeName || calleeName === "unknown") {
+        return;
+      }
+
+      const callerFunction = getEnclosingFunctionName(pathNode);
+
+      invocations.push({
+        type: "function_invocation",
+        callee: calleeName,
+        callerFunction,
+        filePath: safeRelative(targetPath, filePath),
+        line: callNode.loc?.start?.line || null,
+      });
+    },
+  });
+
+  return invocations;
 }
 
 function extractMongooseOperations(ast, targetPath, filePath) {
@@ -380,6 +415,7 @@ function parseFile(targetPath, filePath) {
     mongooseModels: extractMongooseModels(ast, targetPath, filePath),
     mongooseOperations: extractMongooseOperations(ast, targetPath, filePath),
     functionDefinitions: extractFunctionDefinitions(ast, targetPath, filePath),
+    functionInvocations: extractFunctionInvocations(ast, targetPath, filePath),
   };
 }
 
@@ -406,6 +442,7 @@ function parseCodebase(targetPath) {
     mongooseModels: [],
     mongooseOperations: [],
     functionDefinitions: [],
+    functionInvocations: [],
     errors: [],
   };
 
@@ -420,6 +457,7 @@ function parseCodebase(targetPath) {
       summary.mongooseModels.push(...parsed.mongooseModels);
       summary.mongooseOperations.push(...parsed.mongooseOperations);
       summary.functionDefinitions.push(...parsed.functionDefinitions);
+      summary.functionInvocations.push(...parsed.functionInvocations);
     } catch (error) {
       summary.errors.push({
         filePath: safeRelative(targetPath, filePath),

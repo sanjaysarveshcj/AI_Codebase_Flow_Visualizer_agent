@@ -41,6 +41,8 @@ const TOKEN_ALIASES = new Map([
 function summarizeCounts(analysis) {
   const parsed = analysis.parsed || {};
   const flows = analysis.flows || {};
+  const deadCode = analysis.deadCode || {};
+  const deadCodeSummary = deadCode.summary || {};
 
   return {
     filesScanned: parsed.filesScanned || 0,
@@ -50,6 +52,10 @@ function summarizeCounts(analysis) {
     mongooseModels: parsed.mongooseModels?.length || 0,
     mongooseOperations: parsed.mongooseOperations?.length || 0,
     flows: flows.count || 0,
+    deadCodeCandidates:
+      (deadCodeSummary.potentiallyUnusedFunctions || 0) +
+      (deadCodeSummary.unlinkedRoutes || 0) +
+      (deadCodeSummary.unusedModels || 0),
   };
 }
 
@@ -95,6 +101,7 @@ function flowToSearchText(flow) {
     flow.backendRoute?.path,
     flow.backendRoute?.handler,
     ...(flow.middlewareChain || []),
+    ...(flow.tracedFunctions || []),
     ...(flow.databaseOperations || []).map(
       (operation) => `${operation.model}.${operation.operation}`
     ),
@@ -134,6 +141,8 @@ function getFlowScore(flow, questionTokens, loweredQuestion) {
     }
   }
 
+  score += (flow.confidence?.score || 0) * 2;
+
   return score;
 }
 
@@ -153,6 +162,146 @@ function findFlowForKeyword(analysis, question) {
     .map((entry) => entry.flow);
 }
 
+function extractEndpointFromQuestion(question) {
+  const match = question.match(/\/[a-z0-9:_\-/]+/i);
+  return match ? match[0] : null;
+}
+
+function buildFlowExplanation(flow) {
+  return {
+    id: flow.id,
+    entry: `${flow.frontendAction?.method || ""} ${flow.frontendAction?.endpoint || ""}`.trim(),
+    route: `${flow.backendRoute?.method || ""} ${flow.backendRoute?.path || ""}`.trim(),
+    confidence: flow.confidence || { score: 0, level: "low", reasons: [] },
+    confidenceCalibration: flow.confidence?.calibration || null,
+    steps: flow.steps || [],
+    narrative: flow.narrative || "",
+    executionPath: flow.executionPath || [],
+    middlewareChain: flow.middlewareChain || [],
+    helperFunctions: flow.indirectFunctions || [],
+    databaseOperations: (flow.databaseOperations || []).map((operation) => ({
+      model: operation.model,
+      operation: operation.operation,
+      functionName: operation.functionName,
+      filePath: operation.filePath,
+      line: operation.line,
+    })),
+  };
+}
+
+function buildComparisonData(explanations) {
+  const dimensions = [
+    {
+      name: "Confidence",
+      values: explanations.map((item) => ({
+        flowId: item.id,
+        value: `${item.confidence?.level || "low"} (${item.confidence?.score || 0})`,
+      })),
+    },
+    {
+      name: "Route",
+      values: explanations.map((item) => ({
+        flowId: item.id,
+        value: item.route,
+      })),
+    },
+    {
+      name: "Middleware Steps",
+      values: explanations.map((item) => ({
+        flowId: item.id,
+        value: String(item.middlewareChain?.length || 0),
+      })),
+    },
+    {
+      name: "Helper Functions",
+      values: explanations.map((item) => ({
+        flowId: item.id,
+        value: String(item.helperFunctions?.length || 0),
+      })),
+    },
+    {
+      name: "DB Operations",
+      values: explanations.map((item) => ({
+        flowId: item.id,
+        value: String(item.databaseOperations?.length || 0),
+      })),
+    },
+  ];
+
+  const sortedByConfidence = [...explanations].sort(
+    (left, right) => (right.confidence?.score || 0) - (left.confidence?.score || 0)
+  );
+
+  const leader = sortedByConfidence[0];
+  const runnerUp = sortedByConfidence[1];
+
+  const insights = [];
+  if (leader) {
+    insights.push(`Highest-confidence flow: ${leader.entry} -> ${leader.route}.`);
+  }
+
+  if (leader && runnerUp) {
+    const delta = Number(
+      ((leader.confidence?.score || 0) - (runnerUp.confidence?.score || 0)).toFixed(2)
+    );
+    insights.push(`Confidence gap between top two flows: ${delta}.`);
+  }
+
+  return {
+    totalFlows: explanations.length,
+    dimensions,
+    insights,
+  };
+}
+
+function findFlowExplanationCandidates(analysis, question) {
+  const endpointHint = extractEndpointFromQuestion(question);
+  const flows = analysis.flows?.items || [];
+
+  if (!endpointHint) {
+    return findFlowForKeyword(analysis, question)
+      .slice(0, 3)
+      .map(buildFlowExplanation);
+  }
+
+  const endpointCandidates = flows.filter((flow) => {
+    const endpoint = normalizeText(flow.frontendAction?.endpoint);
+    const routePath = normalizeText(flow.backendRoute?.path);
+    const normalizedHint = endpointHint.toLowerCase();
+
+    return endpoint.includes(normalizedHint) || routePath.includes(normalizedHint);
+  });
+
+  if (endpointCandidates.length > 0) {
+    return endpointCandidates
+      .sort((left, right) => (right.confidence?.score || 0) - (left.confidence?.score || 0))
+      .slice(0, 3)
+      .map(buildFlowExplanation);
+  }
+
+  return findFlowForKeyword(analysis, question)
+    .slice(0, 3)
+    .map(buildFlowExplanation);
+}
+
+function findFlowComparisonCandidates(analysis, question) {
+  const keywordMatches = findFlowForKeyword(analysis, question);
+  const flows = analysis.flows?.items || [];
+
+  if (keywordMatches.length >= 2) {
+    return keywordMatches.slice(0, 4).map(buildFlowExplanation);
+  }
+
+  if (flows.length >= 2) {
+    return [...flows]
+      .sort((left, right) => (right.confidence?.score || 0) - (left.confidence?.score || 0))
+      .slice(0, 4)
+      .map(buildFlowExplanation);
+  }
+
+  return keywordMatches.slice(0, 1).map(buildFlowExplanation);
+}
+
 function getHighlightMeta(flowList) {
   return {
     flowIds: flowList.map((flow) => flow.id),
@@ -168,6 +317,37 @@ function answerQuestion(question, analysis) {
       data: summarizeCounts(analysis),
       highlights: getHighlightMeta([]),
     };
+  }
+
+  if (/explain|trace|walk( me)? through|path/.test(lowered)) {
+    const explanations = findFlowExplanationCandidates(analysis, question);
+
+    if (explanations.length > 0) {
+      return {
+        type: "flow_explain",
+        data: explanations,
+        highlights: {
+          flowIds: explanations.map((item) => item.id),
+        },
+      };
+    }
+  }
+
+  if (/compare|versus|\bvs\b|difference|different/.test(lowered)) {
+    const explanations = findFlowComparisonCandidates(analysis, question);
+
+    if (explanations.length >= 2) {
+      return {
+        type: "flow_compare",
+        data: {
+          flows: explanations,
+          comparison: buildComparisonData(explanations),
+        },
+        highlights: {
+          flowIds: explanations.map((item) => item.id),
+        },
+      };
+    }
   }
 
   if (lowered.includes("auth") || lowered.includes("login")) {
@@ -188,6 +368,28 @@ function answerQuestion(question, analysis) {
     };
   }
 
+  if (/dead|unused|orphan|unreachable/.test(lowered)) {
+    const deadCode = analysis.deadCode || {};
+    const candidates = [
+      ...(deadCode.potentiallyUnusedFunctions || []),
+      ...(deadCode.unlinkedRoutes || []),
+      ...(deadCode.unusedModels || []),
+    ];
+
+    return {
+      type: "dead_code",
+      data: {
+        summary: deadCode.summary || {},
+        potentiallyUnusedFunctions: deadCode.potentiallyUnusedFunctions || [],
+        unlinkedRoutes: deadCode.unlinkedRoutes || [],
+        unusedModels: deadCode.unusedModels || [],
+        caveat: deadCode.caveat,
+      },
+      highlights: getHighlightMeta([]),
+      confidence: candidates.length > 0 ? "medium" : "low",
+    };
+  }
+
   const relatedFlows = findFlowForKeyword(analysis, question);
   if (relatedFlows.length > 0) {
     return {
@@ -205,6 +407,9 @@ function answerQuestion(question, analysis) {
         "Give me a summary of this codebase flow",
         "Which routes are related to auth?",
         "What happens when user logs in?",
+        "Explain flow for /api/auth/profile",
+        "Compare login and profile flows",
+        "Show dead code candidates",
       ],
     },
     highlights: getHighlightMeta([]),

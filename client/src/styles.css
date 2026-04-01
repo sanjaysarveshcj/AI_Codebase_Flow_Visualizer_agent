@@ -306,6 +306,36 @@ body {
   font-size: 0.82rem;
 }
 
+.confidence-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 0.74rem;
+  font-family: "IBM Plex Mono", monospace;
+  text-transform: uppercase;
+}
+
+.confidence-high {
+  background: #dcfce7;
+  color: #166534;
+  border-color: #86efac;
+}
+
+.confidence-medium {
+  background: #fef3c7;
+  color: #92400e;
+  border-color: #fcd34d;
+}
+
+.confidence-low {
+  background: #fee2e2;
+  color: #991b1b;
+  border-color: #fca5a5;
+}
+
 .canvas-wrap {
   border: 1px solid #e2e8f0;
   border-radius: 14px;
@@ -510,6 +540,45 @@ body {
   cursor: pointer;
 }
 
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.compare-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 0.5rem;
+}
+
+.compare-card h5 {
+  margin: 0 0 0.35rem;
+  font-size: 0.8rem;
+  color: #334155;
+}
+
+.compare-card ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.compare-card li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: #475569;
+}
+
+.compare-card li strong {
+  color: #0f172a;
+}
+
 .detail-block p,
 .detail-block li {
   margin: 0.35rem 0;
@@ -521,6 +590,54 @@ body {
 .detail-block ol {
   margin: 0;
   padding-left: 1.15rem;
+}
+
+.confidence-reasons {
+  margin: 0.45rem 0 0.7rem;
+  padding-left: 1.1rem;
+}
+
+.confidence-reasons li {
+  margin: 0.2rem 0;
+}
+
+.score-breakdown-list {
+  margin: 0.45rem 0 0.7rem;
+  padding: 0;
+  list-style: none;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.score-breakdown-list li {
+  margin: 0;
+  padding: 0.38rem 0.5rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  border-top: 1px solid #f1f5f9;
+  font-size: 0.77rem;
+}
+
+.score-breakdown-list li:first-child {
+  border-top: none;
+}
+
+.score-breakdown-list span {
+  color: #64748b;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.score-breakdown-list strong {
+  color: #0f172a;
+}
+
+.playback-controls {
+  margin-top: 0.4rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
 }
 
 @keyframes reveal-up {
@@ -566,5 +683,9 @@ body {
 
   .metrics-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .compare-grid {
+    grid-template-columns: 1fr;
   }
 }

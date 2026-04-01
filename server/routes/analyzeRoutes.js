@@ -4,6 +4,7 @@ const parserAgent = require("../agents/parserAgent");
 const flowAgent = require("../agents/flowAgent");
 const graphBuilderAgent = require("../agents/graphBuilderAgent");
 const queryAgent = require("../agents/queryAgent");
+const deadCodeAgent = require("../agents/deadCodeAgent");
 
 const router = express.Router();
 
@@ -16,6 +17,7 @@ router.post("/", (req, res) => {
     const parsed = parserAgent.parseCodebase(targetPath);
     const flows = flowAgent.buildExecutionFlows(parsed);
     const graph = graphBuilderAgent.buildGraph(parsed, flows);
+    const deadCode = deadCodeAgent.analyzeDeadCode(parsed, flows);
 
     res.json({
       ok: true,
@@ -26,6 +28,7 @@ router.post("/", (req, res) => {
       parsed,
       flows,
       graph,
+      deadCode,
     });
   } catch (error) {
     res.status(500).json({

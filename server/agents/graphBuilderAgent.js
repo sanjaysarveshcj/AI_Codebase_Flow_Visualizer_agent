@@ -2,6 +2,18 @@ function toNodeId(prefix, filePath, line) {
   return `${prefix}:${filePath}:${line || 0}`;
 }
 
+function normalizeSymbol(value) {
+  if (!value || typeof value !== "string") {
+    return null;
+  }
+
+  return value
+    .replaceAll(/\(\)$/g, "")
+    .split(".")
+    .at(-1)
+    .toLowerCase();
+}
+
 function ensureNode(nodes, seenNodes, node) {
   if (seenNodes.has(node.id)) {
     return;
@@ -128,10 +140,68 @@ function buildGraph(parsed, flows) {
       },
     });
 
-    previousNodeId = controllerId;
+    const definitionBySymbol = new Map(
+      (flow.tracedFunctionDefinitions || []).map((definition) => [definition.symbol, definition])
+    );
+    const functionNodeBySymbol = new Map();
+
+    function ensureFunctionNodeForSymbol(symbol) {
+      if (!symbol) {
+        return null;
+      }
+
+      if (symbol === flow.controllerSymbol) {
+        return controllerId;
+      }
+
+      if (functionNodeBySymbol.has(symbol)) {
+        return functionNodeBySymbol.get(symbol);
+      }
+
+      const definition = definitionBySymbol.get(symbol);
+      const functionNodeId = definition
+        ? toNodeId("function", definition.filePath, definition.line)
+        : `function:${symbol}:${flow.id}`;
+
+      ensureNode(nodes, seenNodes, {
+        id: functionNodeId,
+        label: definition?.name || symbol,
+        type: "function",
+        meta: {
+          symbol,
+          definition,
+          flowId: flow.id,
+        },
+      });
+
+      functionNodeBySymbol.set(symbol, functionNodeId);
+      return functionNodeId;
+    }
+
+    for (const relation of flow.functionTraversal || []) {
+      const sourceId = ensureFunctionNodeForSymbol(relation.from);
+      const targetId = ensureFunctionNodeForSymbol(relation.to);
+
+      if (!sourceId || !targetId || sourceId === targetId) {
+        continue;
+      }
+
+      ensureEdge(edges, seenEdges, {
+        id: `edge:${sourceId}->${targetId}:${flow.id}:fncall`,
+        source: sourceId,
+        target: targetId,
+        label: "calls",
+        meta: {
+          flowId: flow.id,
+        },
+      });
+    }
 
     for (const operation of flow.databaseOperations || []) {
       const operationId = toNodeId("dbop", operation.filePath, operation.line);
+      const operationOwner = normalizeSymbol(operation.functionName);
+      const operationSourceId =
+        ensureFunctionNodeForSymbol(operationOwner) || controllerId;
 
       ensureNode(nodes, seenNodes, {
         id: operationId,
@@ -141,8 +211,8 @@ function buildGraph(parsed, flows) {
       });
 
       ensureEdge(edges, seenEdges, {
-        id: `edge:${previousNodeId}->${operationId}:${flow.id}`,
-        source: previousNodeId,
+        id: `edge:${operationSourceId}->${operationId}:${flow.id}`,
+        source: operationSourceId,
         target: operationId,
         label: "queries",
         meta: {
@@ -162,8 +232,6 @@ function buildGraph(parsed, flows) {
           },
         });
       }
-
-      previousNodeId = operationId;
     }
   }
 

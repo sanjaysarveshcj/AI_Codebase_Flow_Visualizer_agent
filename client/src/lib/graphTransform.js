@@ -29,18 +29,25 @@ const TYPE_STYLES = {
     lane: 3,
     label: "Controller"
   },
+  function: {
+    color: "#7c2d12",
+    background: "#ffedd5",
+    border: "#f97316",
+    lane: 4,
+    label: "Helper Function"
+  },
   db_operation: {
     color: "#14532d",
     background: "#dcfce7",
     border: "#22c55e",
-    lane: 4,
+    lane: 5,
     label: "DB Operation"
   },
   mongoose_model: {
     color: "#1f2937",
     background: "#e5e7eb",
     border: "#6b7280",
-    lane: 5,
+    lane: 6,
     label: "Database Model"
   }
 };
@@ -138,7 +145,7 @@ function collectHighlightedNodes(edges, highlightedEdges, activeNodeId) {
   return highlightedNodes;
 }
 
-function getHighlightState(graph, activeFlowId, activeNodeId) {
+function getHighlightState(graph, activeFlowId, activeNodeId, playbackHighlight) {
   const edges = graph.edges || [];
   const highlightedEdges = collectFlowEdgeIds(edges, activeFlowId);
   const nodeNeighborEdges = collectNodeNeighborEdgeIds(edges, activeNodeId);
@@ -147,7 +154,19 @@ function getHighlightState(graph, activeFlowId, activeNodeId) {
     highlightedEdges.add(edgeId);
   }
 
+  if (playbackHighlight?.edgeIds) {
+    for (const edgeId of playbackHighlight.edgeIds) {
+      highlightedEdges.add(edgeId);
+    }
+  }
+
   const highlightedNodes = collectHighlightedNodes(edges, highlightedEdges, activeNodeId);
+
+  if (playbackHighlight?.nodeIds) {
+    for (const nodeId of playbackHighlight.nodeIds) {
+      highlightedNodes.add(nodeId);
+    }
+  }
 
   return {
     highlightedEdges,
@@ -155,7 +174,7 @@ function getHighlightState(graph, activeFlowId, activeNodeId) {
   };
 }
 
-export function toReactFlowElements(graph, activeFlowId, activeNodeId) {
+export function toReactFlowElements(graph, activeFlowId, activeNodeId, playbackHighlight) {
   if (!graph) {
     return {
       nodes: [],
@@ -167,7 +186,8 @@ export function toReactFlowElements(graph, activeFlowId, activeNodeId) {
   const { highlightedEdges, highlightedNodes } = getHighlightState(
     graph,
     activeFlowId,
-    activeNodeId
+    activeNodeId,
+    playbackHighlight
   );
 
   const hasHighlight = highlightedEdges.size > 0 || highlightedNodes.size > 0;

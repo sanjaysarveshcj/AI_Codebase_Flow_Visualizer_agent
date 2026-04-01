@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import PropTypes from "prop-types";
 import {
   Background,
@@ -15,8 +15,144 @@ const DEFAULT_QUESTION = "What happens when user logs in?";
 const QUICK_QUESTIONS = [
   "Give me a summary of this codebase flow",
   "Which routes are related to auth?",
-  "What happens when user logs in?"
+  "What happens when user logs in?",
+  "Explain flow for /api/auth/profile",
+  "Compare login and profile flows",
+  "Show dead code candidates"
 ];
+const PLAYBACK_INTERVAL_MS = 1100;
+
+const EXECUTION_TO_NODE_TYPE = {
+  frontend_api: "api_call",
+  backend_route: "express_route",
+  middleware: "middleware",
+  controller: "controller",
+  function: "function",
+  db_operation: "db_operation"
+};
+
+function normalizeLabel(value) {
+  return (value || "").toString().trim().toLowerCase();
+}
+
+function confidenceBadgeClass(level) {
+  if (level === "high") {
+    return "confidence-badge confidence-high";
+  }
+
+  if (level === "medium") {
+    return "confidence-badge confidence-medium";
+  }
+
+  return "confidence-badge confidence-low";
+}
+
+function findStepNodeId(step, nodes, usedNodeIds) {
+  const expectedType = EXECUTION_TO_NODE_TYPE[step.type] || step.type;
+  const expectedLabel = normalizeLabel(step.label);
+  const expectedPath = normalizeLabel(step.filePath);
+  const expectedLine = Number(step.line || 0);
+
+  const candidates = nodes.filter((node) => {
+    if (node.type !== expectedType) {
+      return false;
+    }
+
+    return normalizeLabel(node.label) === expectedLabel;
+  });
+
+  const scopedCandidates = candidates.filter((node) => {
+    const nodePath = normalizeLabel(node.meta?.filePath);
+    const nodeLine = Number(node.meta?.line || 0);
+
+    if (expectedPath && nodePath && expectedPath !== nodePath) {
+      return false;
+    }
+
+    if (expectedLine > 0 && nodeLine > 0 && expectedLine !== nodeLine) {
+      return false;
+    }
+
+    return true;
+  });
+
+  const pool = scopedCandidates.length > 0 ? scopedCandidates : candidates;
+  const available = pool.find((node) => !usedNodeIds.has(node.id));
+  const picked = available || pool[0];
+
+  if (!picked) {
+    return null;
+  }
+
+  usedNodeIds.add(picked.id);
+  return picked.id;
+}
+
+function buildPlaybackSequence(flow, graph) {
+  if (!flow || !graph?.nodes) {
+    return [];
+  }
+
+  const usedNodeIds = new Set();
+
+  return (flow.executionPath || [])
+    .map((step) => {
+      const nodeId = findStepNodeId(step, graph.nodes, usedNodeIds);
+      if (!nodeId) {
+        return null;
+      }
+
+      return {
+        ...step,
+        nodeId
+      };
+    })
+    .filter(Boolean);
+}
+
+function buildPlaybackHighlight(sequence, playbackIndex, graph, flowId) {
+  if (!sequence.length) {
+    return {
+      nodeIds: [],
+      edgeIds: [],
+      currentStep: null
+    };
+  }
+
+  const cappedIndex = Math.min(playbackIndex, sequence.length - 1);
+  const activeSequence = sequence.slice(0, cappedIndex + 1);
+  const nodeIds = activeSequence.map((step) => step.nodeId);
+  const edgeIds = [];
+  const edges = graph?.edges || [];
+
+  for (let index = 1; index < activeSequence.length; index += 1) {
+    const previousNodeId = activeSequence[index - 1].nodeId;
+    const currentNodeId = activeSequence[index].nodeId;
+
+    const matchedEdge = edges.find((edge) => {
+      if (edge.source !== previousNodeId || edge.target !== currentNodeId) {
+        return false;
+      }
+
+      if (!flowId) {
+        return true;
+      }
+
+      const edgeFlowId = edge.meta?.flowId;
+      return !edgeFlowId || edgeFlowId === flowId;
+    });
+
+    if (matchedEdge) {
+      edgeIds.push(matchedEdge.id);
+    }
+  }
+
+  return {
+    nodeIds,
+    edgeIds,
+    currentStep: activeSequence[activeSequence.length - 1]
+  };
+}
 
 function Metric({ label, value }) {
   return (
@@ -32,115 +168,265 @@ Metric.propTypes = {
   value: PropTypes.oneOfType([PropTypes.string, PropTypes.number]).isRequired
 };
 
-function QueryResult({ answer, onHighlightFlow, onAskSuggestion }) {
-  if (!answer) {
-    return (
-      <p className="panel-empty">
-        Ask a question to query the latest analysis result in natural language.
-      </p>
-    );
-  }
+function renderSummaryAnswer(answer) {
+  const summary = answer.data || {};
 
-  if (answer.type === "summary") {
-    const summary = answer.data || {};
-
-    return (
-      <div className="query-result-wrap">
-        <h4>Summary</h4>
-        <div className="query-stat-grid">
-          <div>
-            <span>Files</span>
-            <strong>{summary.filesScanned ?? 0}</strong>
-          </div>
-          <div>
-            <span>API Calls</span>
-            <strong>{summary.apiCalls ?? 0}</strong>
-          </div>
-          <div>
-            <span>Routes</span>
-            <strong>{summary.expressRoutes ?? 0}</strong>
-          </div>
-          <div>
-            <span>Flows</span>
-            <strong>{summary.flows ?? 0}</strong>
-          </div>
+  return (
+    <div className="query-result-wrap">
+      <h4>Summary</h4>
+      <div className="query-stat-grid">
+        <div>
+          <span>Files</span>
+          <strong>{summary.filesScanned ?? 0}</strong>
+        </div>
+        <div>
+          <span>API Calls</span>
+          <strong>{summary.apiCalls ?? 0}</strong>
+        </div>
+        <div>
+          <span>Routes</span>
+          <strong>{summary.expressRoutes ?? 0}</strong>
+        </div>
+        <div>
+          <span>Flows</span>
+          <strong>{summary.flows ?? 0}</strong>
         </div>
       </div>
-    );
-  }
+    </div>
+  );
+}
 
-  if (answer.type === "auth_routes") {
-    const routes = answer.data?.routes || [];
-    const relatedFlows = answer.data?.relatedFlows || [];
+function renderAuthRoutesAnswer(answer, onHighlightFlow) {
+  const routes = answer.data?.routes || [];
+  const relatedFlows = answer.data?.relatedFlows || [];
 
-    return (
-      <div className="query-result-wrap">
-        <h4>Auth Routes</h4>
-        {routes.length > 0 ? (
-          <ul className="query-list">
-            {routes.map((route) => (
-              <li key={`${route.filePath}:${route.line}:${route.path}`}>
-                <strong>
-                  {route.method} {route.path}
-                </strong>
-                <span>
-                  {route.filePath}:{route.line || "-"}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="panel-empty">No auth-specific routes found.</p>
-        )}
-
-        {relatedFlows.length > 0 ? (
-          <div className="query-flow-actions">
-            <p>Related flows</p>
-            {relatedFlows.map((flow) => (
-              <button
-                key={flow.id}
-                type="button"
-                className="query-action"
-                onClick={() => onHighlightFlow(flow.id)}
-              >
-                Highlight {flow.frontendAction.method} {flow.frontendAction.endpoint}
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
-  if (answer.type === "flow_match") {
-    const flowMatches = answer.data || [];
-
-    return (
-      <div className="query-result-wrap">
-        <h4>Matched Flows</h4>
+  return (
+    <div className="query-result-wrap">
+      <h4>Auth Routes</h4>
+      {routes.length > 0 ? (
         <ul className="query-list">
-          {flowMatches.map((flow) => (
-            <li key={flow.id}>
+          {routes.map((route) => (
+            <li key={`${route.filePath}:${route.line}:${route.path}`}>
               <strong>
-                {flow.frontendAction.method} {flow.frontendAction.endpoint}
+                {route.method} {route.path}
               </strong>
               <span>
-                {flow.backendRoute.method} {flow.backendRoute.path}
+                {route.filePath}:{route.line || "-"}
               </span>
-              <button
-                type="button"
-                className="query-action"
-                onClick={() => onHighlightFlow(flow.id)}
-              >
-                Highlight Flow
-              </button>
             </li>
           ))}
         </ul>
-      </div>
-    );
-  }
+      ) : (
+        <p className="panel-empty">No auth-specific routes found.</p>
+      )}
 
+      {relatedFlows.length > 0 ? (
+        <div className="query-flow-actions">
+          <p>Related flows</p>
+          {relatedFlows.map((flow) => (
+            <button
+              key={flow.id}
+              type="button"
+              className="query-action"
+              onClick={() => onHighlightFlow(flow.id)}
+            >
+              Highlight {flow.frontendAction.method} {flow.frontendAction.endpoint}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function renderFlowMatchAnswer(answer, onHighlightFlow) {
+  const flowMatches = answer.data || [];
+
+  return (
+    <div className="query-result-wrap">
+      <h4>Matched Flows</h4>
+      <ul className="query-list">
+        {flowMatches.map((flow) => (
+          <li key={flow.id}>
+            <strong>
+              {flow.frontendAction.method} {flow.frontendAction.endpoint}
+            </strong>
+            <span>
+              {flow.backendRoute.method} {flow.backendRoute.path}
+            </span>
+            <button
+              type="button"
+              className="query-action"
+              onClick={() => onHighlightFlow(flow.id)}
+            >
+              Highlight Flow
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function renderDeadCodeAnswer(answer) {
+  const summary = answer.data?.summary || {};
+  const functions = answer.data?.potentiallyUnusedFunctions || [];
+  const routes = answer.data?.unlinkedRoutes || [];
+  const models = answer.data?.unusedModels || [];
+
+  return (
+    <div className="query-result-wrap">
+      <h4>Dead Code Candidates</h4>
+      <div className="query-stat-grid">
+        <div>
+          <span>Functions</span>
+          <strong>{summary.potentiallyUnusedFunctions ?? 0}</strong>
+        </div>
+        <div>
+          <span>Routes</span>
+          <strong>{summary.unlinkedRoutes ?? 0}</strong>
+        </div>
+        <div>
+          <span>Models</span>
+          <strong>{summary.unusedModels ?? 0}</strong>
+        </div>
+        <div>
+          <span>API Calls</span>
+          <strong>{summary.unmatchedApiCalls ?? 0}</strong>
+        </div>
+      </div>
+
+      {functions.length > 0 ? (
+        <ul className="query-list">
+          {functions.slice(0, 5).map((item) => (
+            <li key={`${item.filePath}:${item.line}:${item.name}`}>
+              <strong>{item.name}</strong>
+              <span>
+                {item.filePath}:{item.line || "-"}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {routes.length > 0 ? (
+        <ul className="query-list">
+          {routes.slice(0, 3).map((item) => (
+            <li key={`${item.filePath}:${item.line}:${item.path}`}>
+              <strong>
+                {item.method} {item.path}
+              </strong>
+              <span>
+                {item.filePath}:{item.line || "-"}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {models.length > 0 ? (
+        <ul className="query-list">
+          {models.slice(0, 3).map((item) => (
+            <li key={`${item.filePath}:${item.line}:${item.model}`}>
+              <strong>{item.model}</strong>
+              <span>
+                {item.filePath}:{item.line || "-"}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      <p className="panel-empty">{answer.data?.caveat}</p>
+    </div>
+  );
+}
+
+function renderFlowExplainAnswer(answer, onHighlightFlow) {
+  const explanations = answer.data || [];
+
+  return (
+    <div className="query-result-wrap">
+      <h4>Flow Explanation</h4>
+      <ul className="query-list">
+        {explanations.map((item) => (
+          <li key={item.id}>
+            <strong>{item.entry}</strong>
+            <span>{item.route}</span>
+            <span>
+              Confidence: {item.confidence?.level || "low"} ({item.confidence?.score || 0})
+            </span>
+            <span>{item.narrative || "No path narrative available."}</span>
+            <button
+              type="button"
+              className="query-action"
+              onClick={() => onHighlightFlow(item.id)}
+            >
+              Highlight Flow
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function renderFlowCompareAnswer(answer, onHighlightFlow) {
+  const comparedFlows = answer.data?.flows || [];
+  const comparison = answer.data?.comparison || {};
+
+  return (
+    <div className="query-result-wrap">
+      <h4>Flow Comparison</h4>
+      <ul className="query-list">
+        {comparedFlows.map((flow) => (
+          <li key={flow.id}>
+            <strong>{flow.entry}</strong>
+            <span>{flow.route}</span>
+            <span>
+              Confidence: {flow.confidence?.level || "low"} ({flow.confidence?.score || 0})
+            </span>
+            <button
+              type="button"
+              className="query-action"
+              onClick={() => onHighlightFlow(flow.id)}
+            >
+              Highlight Flow
+            </button>
+          </li>
+        ))}
+      </ul>
+
+      {(comparison.dimensions || []).length > 0 ? (
+        <div className="compare-grid">
+          {(comparison.dimensions || []).map((dimension) => (
+            <div key={dimension.name} className="compare-card">
+              <h5>{dimension.name}</h5>
+              <ul>
+                {(dimension.values || []).map((value) => (
+                  <li key={`${dimension.name}:${value.flowId}`}>
+                    <span>{value.flowId.slice(0, 16)}...</span>
+                    <strong>{value.value}</strong>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {(comparison.insights || []).length > 0 ? (
+        <ul className="confidence-reasons">
+          {(comparison.insights || []).map((insight) => (
+            <li key={insight}>{insight}</li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+function renderFallbackAnswer(answer, onAskSuggestion) {
   const fallbackMessage = answer.data?.message || "No answer available.";
   const suggestions = answer.data?.suggestions || [];
 
@@ -167,6 +453,33 @@ function QueryResult({ answer, onHighlightFlow, onAskSuggestion }) {
   );
 }
 
+function QueryResult({ answer, onHighlightFlow, onAskSuggestion }) {
+  if (!answer) {
+    return (
+      <p className="panel-empty">
+        Ask a question to query the latest analysis result in natural language.
+      </p>
+    );
+  }
+
+  switch (answer.type) {
+    case "summary":
+      return renderSummaryAnswer(answer);
+    case "auth_routes":
+      return renderAuthRoutesAnswer(answer, onHighlightFlow);
+    case "flow_explain":
+      return renderFlowExplainAnswer(answer, onHighlightFlow);
+    case "flow_compare":
+      return renderFlowCompareAnswer(answer, onHighlightFlow);
+    case "flow_match":
+      return renderFlowMatchAnswer(answer, onHighlightFlow);
+    case "dead_code":
+      return renderDeadCodeAnswer(answer);
+    default:
+      return renderFallbackAnswer(answer, onAskSuggestion);
+  }
+}
+
 QueryResult.propTypes = {
   answer: PropTypes.shape({
     type: PropTypes.string,
@@ -176,6 +489,104 @@ QueryResult.propTypes = {
   onHighlightFlow: PropTypes.func.isRequired,
   onAskSuggestion: PropTypes.func.isRequired
 };
+
+function renderFlowPanelContent(hasAnalysis, flows, activeFlowId, onSelectFlow) {
+  if (!hasAnalysis) {
+    return <p className="panel-empty">Run an analysis to populate connected flows.</p>;
+  }
+
+  if (flows.length === 0) {
+    return <p className="panel-empty">No API-to-route matches were found for this target path.</p>;
+  }
+
+  return (
+    <ul className="flow-list">
+      {flows.map((flow, index) => {
+        const isActive = flow.id === activeFlowId;
+
+        return (
+          <li key={flow.id}>
+            <button
+              type="button"
+              className={isActive ? "flow-item active" : "flow-item"}
+              onClick={() => {
+                onSelectFlow(flow.id);
+              }}
+            >
+              <span className="flow-index">Flow {index + 1}</span>
+              <strong>
+                {flow.frontendAction.method} {flow.frontendAction.endpoint}
+              </strong>
+              <span>
+                {flow.backendRoute.method} {flow.backendRoute.path}
+              </span>
+              <span className={confidenceBadgeClass(flow.confidence?.level)}>
+                Confidence: {flow.confidence?.level || "low"} ({flow.confidence?.score || 0})
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function renderGraphPanelContent(hasAnalysis, graphElements, onNodeClick) {
+  if (!hasAnalysis) {
+    return (
+      <div className="panel-empty graph-empty">
+        Visualization is waiting for analyzer output.
+      </div>
+    );
+  }
+
+  return (
+    <div className="canvas-wrap">
+      <ReactFlowProvider>
+        <ReactFlow
+          nodes={graphElements.nodes}
+          edges={graphElements.edges}
+          onNodeClick={onNodeClick}
+          fitView
+          fitViewOptions={{ padding: 0.25 }}
+          proOptions={{ hideAttribution: true }}
+        >
+          <MiniMap nodeBorderRadius={12} pannable zoomable />
+          <Controls position="bottom-right" />
+          <Background gap={24} size={1.2} color="#cbd5e1" />
+        </ReactFlow>
+      </ReactFlowProvider>
+    </div>
+  );
+}
+
+function assertApiSuccess(response, payload, fallbackMessage) {
+  if (response.ok && payload.ok) {
+    return;
+  }
+
+  throw new Error(payload.message || fallbackMessage);
+}
+
+function validateQueryRequest(analysis, question) {
+  if (analysis == null) {
+    return "Run analysis before querying.";
+  }
+
+  if (question.length === 0) {
+    return "Please enter a question.";
+  }
+
+  return "";
+}
+
+function highlightFirstMatchedFlow(answer, onHighlightFlow) {
+  const firstFlowId = answer?.highlights?.flowIds?.[0];
+
+  if (firstFlowId) {
+    onHighlightFlow(firstFlowId);
+  }
+}
 
 export default function App() {
   const [targetPath, setTargetPath] = useState(DEFAULT_TARGET_PATH);
@@ -188,6 +599,8 @@ export default function App() {
   const [queryAnswer, setQueryAnswer] = useState(null);
   const [queryError, setQueryError] = useState("");
   const [isQueryLoading, setIsQueryLoading] = useState(false);
+  const [isPlaybackRunning, setIsPlaybackRunning] = useState(false);
+  const [playbackIndex, setPlaybackIndex] = useState(0);
 
   const flows = analysis?.flows?.items || [];
   const hasAnalysis = Boolean(analysis);
@@ -202,9 +615,43 @@ export default function App() {
     [analysis, activeNodeId]
   );
 
+  const playbackSequence = useMemo(
+    () => buildPlaybackSequence(activeFlow, analysis?.graph),
+    [activeFlow, analysis]
+  );
+
+  const playbackHighlight = useMemo(
+    () => buildPlaybackHighlight(playbackSequence, playbackIndex, analysis?.graph, activeFlowId),
+    [playbackSequence, playbackIndex, analysis, activeFlowId]
+  );
+
+  useEffect(() => {
+    setIsPlaybackRunning(false);
+    setPlaybackIndex(0);
+  }, [activeFlowId]);
+
+  useEffect(() => {
+    if (!isPlaybackRunning || playbackSequence.length === 0) {
+      return undefined;
+    }
+
+    if (playbackIndex >= playbackSequence.length - 1) {
+      setIsPlaybackRunning(false);
+      return undefined;
+    }
+
+    const timeoutId = setTimeout(() => {
+      setPlaybackIndex((current) => Math.min(current + 1, playbackSequence.length - 1));
+    }, PLAYBACK_INTERVAL_MS);
+
+    return () => {
+      clearTimeout(timeoutId);
+    };
+  }, [isPlaybackRunning, playbackIndex, playbackSequence]);
+
   const graphElements = useMemo(
-    () => toReactFlowElements(analysis?.graph, activeFlowId, activeNodeId),
-    [analysis, activeFlowId, activeNodeId]
+    () => toReactFlowElements(analysis?.graph, activeFlowId, activeNodeId, playbackHighlight),
+    [analysis, activeFlowId, activeNodeId, playbackHighlight]
   );
 
   async function runAnalysis(event) {
@@ -223,20 +670,21 @@ export default function App() {
       });
 
       const payload = await response.json();
-
-      if (!response.ok || !payload.ok) {
-        throw new Error(payload.message || "Analyzer request failed");
-      }
+      assertApiSuccess(response, payload, "Analyzer request failed");
 
       setAnalysis(payload);
       setActiveNodeId("");
       setActiveFlowId(payload.flows?.items?.[0]?.id || "");
+      setPlaybackIndex(0);
+      setIsPlaybackRunning(false);
       setQueryAnswer(null);
       setQueryError("");
     } catch (requestError) {
       setAnalysis(null);
       setActiveFlowId("");
       setActiveNodeId("");
+      setPlaybackIndex(0);
+      setIsPlaybackRunning(false);
       setQueryAnswer(null);
       setQueryError("");
       setError(requestError.message);
@@ -248,18 +696,17 @@ export default function App() {
   function highlightFlow(flowId) {
     setActiveFlowId(flowId);
     setActiveNodeId("");
+    setPlaybackIndex(0);
+    setIsPlaybackRunning(false);
   }
 
   async function submitQuery(nextQuestion) {
     const trimmedQuestion = (nextQuestion || "").trim();
 
-    if (!analysis) {
-      setQueryError("Run analysis before querying.");
-      return;
-    }
+    const validationError = validateQueryRequest(analysis, trimmedQuestion);
 
-    if (!trimmedQuestion) {
-      setQueryError("Please enter a question.");
+    if (validationError) {
+      setQueryError(validationError);
       return;
     }
 
@@ -280,17 +727,10 @@ export default function App() {
       });
 
       const payload = await response.json();
-
-      if (!response.ok || !payload.ok) {
-        throw new Error(payload.message || "Query request failed");
-      }
+      assertApiSuccess(response, payload, "Query request failed");
 
       setQueryAnswer(payload.answer);
-
-      const firstFlowId = payload.answer?.highlights?.flowIds?.[0];
-      if (firstFlowId) {
-        highlightFlow(firstFlowId);
-      }
+      highlightFirstMatchedFlow(payload.answer, highlightFlow);
     } catch (requestError) {
       setQueryAnswer(null);
       setQueryError(requestError.message);
@@ -304,68 +744,14 @@ export default function App() {
     void submitQuery(question);
   }
 
-  let flowPanelContent = <p className="panel-empty">Run an analysis to populate connected flows.</p>;
+  const flowPanelContent = renderFlowPanelContent(hasAnalysis, flows, activeFlowId, highlightFlow);
 
-  if (hasAnalysis && flows.length === 0) {
-    flowPanelContent = (
-      <p className="panel-empty">No API-to-route matches were found for this target path.</p>
-    );
-  }
-
-  if (hasAnalysis && flows.length > 0) {
-    flowPanelContent = (
-      <ul className="flow-list">
-        {flows.map((flow, index) => {
-          const isActive = flow.id === activeFlowId;
-
-          return (
-            <li key={flow.id}>
-              <button
-                type="button"
-                className={isActive ? "flow-item active" : "flow-item"}
-                onClick={() => {
-                  setActiveFlowId(flow.id);
-                  setActiveNodeId("");
-                }}
-              >
-                <span className="flow-index">Flow {index + 1}</span>
-                <strong>
-                  {flow.frontendAction.method} {flow.frontendAction.endpoint}
-                </strong>
-                <span>
-                  {flow.backendRoute.method} {flow.backendRoute.path}
-                </span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-    );
-  }
-
-  const graphPanelContent = hasAnalysis ? (
-    <div className="canvas-wrap">
-      <ReactFlowProvider>
-        <ReactFlow
-          nodes={graphElements.nodes}
-          edges={graphElements.edges}
-          onNodeClick={(_event, node) => {
-            setActiveNodeId(node.id);
-          }}
-          fitView
-          fitViewOptions={{ padding: 0.25 }}
-          proOptions={{ hideAttribution: true }}
-        >
-          <MiniMap nodeBorderRadius={12} pannable zoomable />
-          <Controls position="bottom-right" />
-          <Background gap={24} size={1.2} color="#cbd5e1" />
-        </ReactFlow>
-      </ReactFlowProvider>
-    </div>
-  ) : (
-    <div className="panel-empty graph-empty">
-      Visualization is waiting for analyzer output.
-    </div>
+  const graphPanelContent = renderGraphPanelContent(
+    hasAnalysis,
+    graphElements,
+    (_event, node) => {
+      setActiveNodeId(node.id);
+    }
   );
 
   return (
@@ -374,11 +760,13 @@ export default function App() {
       <div className="bg-orb bg-orb-2" />
 
       <header className="hero">
-        <p className="eyebrow">Module 3 · Natural Language Querying</p>
+        <p className="eyebrow">Module 7 · Confidence Calibration + Compare + Playback</p>
         <h1>Trace Full-Stack Execution Like a Transit Map</h1>
         <p className="hero-copy">
           Analyze any MERN project path, render API-to-route-to-model links, and
-          ask natural-language questions to jump directly to the relevant flow.
+          ask natural-language questions to jump directly to the relevant flow,
+          including calibrated confidence scoring, multi-flow comparisons, and
+          path-level playback.
         </p>
       </header>
 
@@ -410,6 +798,16 @@ export default function App() {
             value={analysis?.parsed?.expressRoutes?.length ?? "-"}
           />
           <Metric label="Matched Flows" value={analysis?.flows?.count ?? "-"} />
+          <Metric
+            label="Dead Code Candidates"
+            value={
+              analysis?.deadCode
+                ? (analysis.deadCode.summary?.potentiallyUnusedFunctions || 0) +
+                  (analysis.deadCode.summary?.unlinkedRoutes || 0) +
+                  (analysis.deadCode.summary?.unusedModels || 0)
+                : "-"
+            }
+          />
         </div>
       </section>
 
@@ -425,6 +823,8 @@ export default function App() {
               onClick={() => {
                 setActiveFlowId("");
                 setActiveNodeId("");
+                setPlaybackIndex(0);
+                setIsPlaybackRunning(false);
               }}
             >
               Clear Highlight
@@ -452,6 +852,32 @@ export default function App() {
           {activeFlow ? (
             <div className="detail-block">
               <h3>Active Flow Steps</h3>
+              <p>
+                <strong>Confidence:</strong> {activeFlow.confidence?.level || "low"} (
+                {activeFlow.confidence?.score || 0})
+              </p>
+              <p>
+                <strong>Narrative:</strong> {activeFlow.narrative || "-"}
+              </p>
+              {activeFlow.confidence?.reasons?.length > 0 ? (
+                <ul className="confidence-reasons">
+                  {activeFlow.confidence.reasons.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              ) : null}
+              {activeFlow.confidence?.calibration?.scoreBreakdown?.length > 0 ? (
+                <ul className="score-breakdown-list">
+                  {activeFlow.confidence.calibration.scoreBreakdown.map((item) => (
+                    <li key={item.signal}>
+                      <span>{item.signal}</span>
+                      <strong>
+                        weight {item.weight} x evidence {item.evidence} = {item.contribution}
+                      </strong>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
               <ol>
                 {activeFlow.steps.map((step) => (
                   <li key={step}>{step}</li>
@@ -461,6 +887,68 @@ export default function App() {
           ) : (
             <p className="panel-empty">Select a flow from the left panel to highlight a full path.</p>
           )}
+
+          <div className="detail-block">
+            <h3>Path Playback</h3>
+            {activeFlow && playbackSequence.length > 0 ? (
+              <>
+                <p>
+                  <strong>Step:</strong> {Math.min(playbackIndex + 1, playbackSequence.length)} /{" "}
+                  {playbackSequence.length}
+                </p>
+                <p>
+                  <strong>Current:</strong> {playbackHighlight.currentStep?.label || "-"}
+                </p>
+                <div className="playback-controls">
+                  <button
+                    type="button"
+                    className="query-action"
+                    onClick={() => {
+                      setIsPlaybackRunning((current) => !current);
+                    }}
+                  >
+                    {isPlaybackRunning ? "Pause" : "Play"}
+                  </button>
+                  <button
+                    type="button"
+                    className="query-action"
+                    onClick={() => {
+                      setIsPlaybackRunning(false);
+                      setPlaybackIndex((current) => Math.max(0, current - 1));
+                    }}
+                    disabled={playbackIndex <= 0}
+                  >
+                    Step Back
+                  </button>
+                  <button
+                    type="button"
+                    className="query-action"
+                    onClick={() => {
+                      setIsPlaybackRunning(false);
+                      setPlaybackIndex((current) =>
+                        Math.min(current + 1, Math.max(playbackSequence.length - 1, 0))
+                      );
+                    }}
+                    disabled={playbackIndex >= playbackSequence.length - 1}
+                  >
+                    Step Forward
+                  </button>
+                  <button
+                    type="button"
+                    className="query-action"
+                    onClick={() => {
+                      setIsPlaybackRunning(false);
+                      setPlaybackIndex(0);
+                    }}
+                  >
+                    Reset
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p className="panel-empty">Select a flow to run step-by-step playback.</p>
+            )}
+          </div>
 
           {activeNode ? (
             <div className="detail-block">
@@ -481,6 +969,30 @@ export default function App() {
           ) : (
             <p className="panel-empty">Click a graph node to inspect exact source metadata.</p>
           )}
+
+          <div className="detail-block">
+            <h3>Dead Code Report</h3>
+            {analysis?.deadCode ? (
+              <>
+                <p>
+                  <strong>Unused Functions:</strong>{" "}
+                  {analysis.deadCode.summary?.potentiallyUnusedFunctions || 0}
+                </p>
+                <p>
+                  <strong>Unlinked Routes:</strong> {analysis.deadCode.summary?.unlinkedRoutes || 0}
+                </p>
+                <p>
+                  <strong>Unused Models:</strong> {analysis.deadCode.summary?.unusedModels || 0}
+                </p>
+                <p>
+                  <strong>Unmatched API Calls:</strong>{" "}
+                  {analysis.deadCode.summary?.unmatchedApiCalls || 0}
+                </p>
+              </>
+            ) : (
+              <p className="panel-empty">Run analysis to generate dead code candidates.</p>
+            )}
+          </div>
 
           <div className="detail-block">
             <h3>Query Agent</h3>

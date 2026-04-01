@@ -88,6 +88,9 @@ The system follows a **multi-agent architecture**:
 * ✅ Click-to-trace execution paths
 * ✅ Middleware detection (auth, error handlers)
 * ✅ Natural language querying
+* ✅ Explainable flow traces with confidence scoring
+* ✅ Multi-flow comparison insights from natural-language queries
+* ✅ Step-by-step path playback in graph UI
 * ✅ Interactive graph-based UI
 * ✅ Scalable for large codebases
 
@@ -145,7 +148,7 @@ Implemented in this repository:
 * Query result actions that auto-highlight matched flows in the graph
 * Improved query matching in `server/agents/queryAgent.js` using token-based scoring
 
-### Module 4: Advanced Execution Tracing (In Progress)
+### Module 4: Advanced Execution Tracing (Completed)
 
 Implemented in this repository:
 
@@ -161,10 +164,66 @@ Implemented in this repository:
    * `controller`
    * `db_operation`
 * Extended sample project with middleware-protected profile route
+* Dead code detection heuristics for:
 
-Still pending in Phase 4:
+   * potentially unused server functions
+   * unlinked backend routes
+   * unused mongoose models
+   * unmatched frontend API calls
 
-* Dead code detection
+### Module 5: Indirect Function-Call Tracing (Completed)
+
+Implemented in this repository:
+
+* Function invocation extraction with caller context
+* Internal function call-graph construction
+* Reachability tracing from route controller handlers
+* Extended flow reasoning to include helper-function chains:
+
+   * `Frontend API -> Route -> Middleware -> Controller -> Helper Function(s) -> DB Operation`
+* Extended graph node type:
+
+   * `function` (helper/internal function)
+* DB operation linking now supports indirect helper calls
+
+### Module 6: Explainable Flow Intelligence (Completed)
+
+Implemented in this repository:
+
+* Per-flow confidence scoring in execution reasoning (`high` / `medium` / `low`)
+* Confidence rationale signals (route match quality, controller resolution, helper-chain traceability, DB linkage)
+* Structured execution path metadata for each flow (`executionPath` + `narrative`)
+* Query intent for explanation requests:
+
+   * Example: `Explain flow for /api/auth/profile`
+   * Returns typed response: `flow_explain`
+* UI upgrades in `client/`:
+
+   * Flow list confidence badges
+   * Inspector confidence + rationale details
+   * Query result rendering for explain responses
+
+### Module 7: Confidence Calibration + Compare + Playback (Completed)
+
+Implemented in this repository:
+
+* Calibrated confidence scoring in execution reasoning with weighted evidence breakdown:
+
+   * route match quality
+   * middleware chain evidence
+   * controller resolution quality
+   * helper-function traceability
+   * DB linkage confidence
+* Query intent for flow comparison requests:
+
+   * Example: `Compare login and profile flows`
+   * Returns typed response: `flow_compare`
+   * Includes dimension-wise comparison and summary insights
+* UI playback mode in `client/`:
+
+   * step-by-step execution path playback controls
+   * play / pause / step-forward / step-back / reset actions
+   * graph highlight progression for node and edge path traversal
 
 ---
 
@@ -306,7 +365,7 @@ http://localhost:5173
 
 * ✅ Middleware tracking
 * ✅ Database interaction mapping
-* ⏳ Dead code detection
+* ✅ Dead code detection
 
 ---
 
@@ -337,25 +396,10 @@ http://localhost:5173
 
 ---
 
-## 🏆 Resume Highlights
-
-* Built a **multi-agent AI system** to visualize full-stack execution flow
-* Developed AST-based parser for extracting routes and API interactions
-* Designed an interactive graph UI for code tracing
-* Implemented natural language querying for codebase exploration
-
----
-
 ## 🤝 Contributing
 
 Contributions are welcome!
 Feel free to fork the repo and submit pull requests.
-
----
-
-## 📜 License
-
-This project is licensed under the MIT License.
 
 ---
 
@@ -370,7 +414,7 @@ This project is licensed under the MIT License.
 ## 📬 Contact
 
 For questions or collaboration:
-📧 [your-email@example.com](mailto:your-email@example.com)
+📧 [sanjaysarveshcj@gmail.com](mailto:sanjaysarveshcj@gmail.com)
 
 ---
 
