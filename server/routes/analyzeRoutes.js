@@ -39,7 +39,7 @@ router.post("/", (req, res) => {
   }
 });
 
-router.post("/query", (req, res) => {
+router.post("/query", async (req, res) => {
   try {
     const { question, analysis } = req.body || {};
 
@@ -57,7 +57,7 @@ router.post("/query", (req, res) => {
       });
     }
 
-    const answer = queryAgent.answerQuestion(question, analysis);
+    const answer = await queryAgent.answerQuestion(question, analysis);
 
     return res.json({
       ok: true,

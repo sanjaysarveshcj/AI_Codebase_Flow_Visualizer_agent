@@ -139,6 +139,10 @@ Implemented in this repository:
 
 * Query panel in `client/` wired to `POST /api/analyze/query`
 * Natural-language question input + quick query prompts
+* Hybrid query reasoning in `server/agents/queryAgent.js`:
+
+   * Heuristic/rule-based routing as default
+   * Optional OpenAI LLM classification layer with heuristic fallback
 * Typed query responses:
 
    * `summary`
@@ -147,6 +151,21 @@ Implemented in this repository:
    * `fallback` with suggestions
 * Query result actions that auto-highlight matched flows in the graph
 * Improved query matching in `server/agents/queryAgent.js` using token-based scoring
+
+Optional LLM configuration for Query Agent:
+
+* Provider selection (optional): `QUERY_AGENT_LLM_PROVIDER` = `openrouter` or `openai`
+* OpenRouter setup:
+
+   * Set `OPENROUTER_API_KEY`
+   * Optional model override: `QUERY_AGENT_LLM_MODEL` (example: `openai/gpt-4.1-mini`)
+   * Optional endpoint override: `OPENROUTER_BASE_URL` (default: `https://openrouter.ai/api/v1`)
+   * Optional attribution headers: `OPENROUTER_SITE_URL`, `OPENROUTER_APP_NAME`
+* OpenAI setup:
+
+   * Set `OPENAI_API_KEY`
+   * Optional model override: `QUERY_AGENT_LLM_MODEL` (default: `gpt-4.1-mini`)
+* If LLM is unavailable, Query Agent automatically falls back to heuristic mode
 
 ### Module 4: Advanced Execution Tracing (Completed)
 

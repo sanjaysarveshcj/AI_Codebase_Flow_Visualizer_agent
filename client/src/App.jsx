@@ -462,29 +462,57 @@ function QueryResult({ answer, onHighlightFlow, onAskSuggestion }) {
     );
   }
 
+  let typedContent;
+
   switch (answer.type) {
     case "summary":
-      return renderSummaryAnswer(answer);
+      typedContent = renderSummaryAnswer(answer);
+      break;
     case "auth_routes":
-      return renderAuthRoutesAnswer(answer, onHighlightFlow);
+      typedContent = renderAuthRoutesAnswer(answer, onHighlightFlow);
+      break;
     case "flow_explain":
-      return renderFlowExplainAnswer(answer, onHighlightFlow);
+      typedContent = renderFlowExplainAnswer(answer, onHighlightFlow);
+      break;
     case "flow_compare":
-      return renderFlowCompareAnswer(answer, onHighlightFlow);
+      typedContent = renderFlowCompareAnswer(answer, onHighlightFlow);
+      break;
     case "flow_match":
-      return renderFlowMatchAnswer(answer, onHighlightFlow);
+      typedContent = renderFlowMatchAnswer(answer, onHighlightFlow);
+      break;
     case "dead_code":
-      return renderDeadCodeAnswer(answer);
+      typedContent = renderDeadCodeAnswer(answer);
+      break;
     default:
-      return renderFallbackAnswer(answer, onAskSuggestion);
+      typedContent = renderFallbackAnswer(answer, onAskSuggestion);
   }
+
+  const answerText = (answer.answerText || "").trim();
+  const llmMeta = [answer.llmProvider, answer.llmModel].filter(Boolean).join(" · ");
+
+  return (
+    <div className="query-answer-stack">
+      {answerText ? (
+        <div className="llm-answer-block">
+          <p className="llm-answer-title">Answer</p>
+          <p className="llm-answer-text">{answerText}</p>
+          {llmMeta ? <p className="llm-answer-meta">{llmMeta}</p> : null}
+        </div>
+      ) : null}
+      {typedContent}
+    </div>
+  );
 }
 
 QueryResult.propTypes = {
   answer: PropTypes.shape({
     type: PropTypes.string,
     data: PropTypes.any,
-    highlights: PropTypes.object
+    highlights: PropTypes.object,
+    answerText: PropTypes.string,
+    strategy: PropTypes.string,
+    llmProvider: PropTypes.string,
+    llmModel: PropTypes.string
   }),
   onHighlightFlow: PropTypes.func.isRequired,
   onAskSuggestion: PropTypes.func.isRequired
@@ -601,6 +629,7 @@ export default function App() {
   const [isQueryLoading, setIsQueryLoading] = useState(false);
   const [isPlaybackRunning, setIsPlaybackRunning] = useState(false);
   const [playbackIndex, setPlaybackIndex] = useState(0);
+  const [isGraphExpanded, setIsGraphExpanded] = useState(false);
 
   const flows = analysis?.flows?.items || [];
   const hasAnalysis = Boolean(analysis);
@@ -648,6 +677,28 @@ export default function App() {
       clearTimeout(timeoutId);
     };
   }, [isPlaybackRunning, playbackIndex, playbackSequence]);
+
+  useEffect(() => {
+    if (!isGraphExpanded) {
+      return undefined;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    function onKeyDown(event) {
+      if (event.key === "Escape") {
+        setIsGraphExpanded(false);
+      }
+    }
+
+    globalThis.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      globalThis.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isGraphExpanded]);
 
   const graphElements = useMemo(
     () => toReactFlowElements(analysis?.graph, activeFlowId, activeNodeId, playbackHighlight),
@@ -813,6 +864,17 @@ export default function App() {
 
       {error ? <p className="error-banner">{error}</p> : null}
 
+      {isGraphExpanded ? (
+        <button
+          type="button"
+          className="graph-backdrop"
+          aria-label="Close expanded graph view"
+          onClick={() => {
+            setIsGraphExpanded(false);
+          }}
+        />
+      ) : null}
+
       <main className="workspace-grid">
         <aside className="panel flow-panel">
           <div className="panel-header">
@@ -834,10 +896,21 @@ export default function App() {
           {flowPanelContent}
         </aside>
 
-        <section className="panel graph-panel">
+        <section className={isGraphExpanded ? "panel graph-panel expanded" : "panel graph-panel"}>
           <div className="panel-header">
-            <h2>Flow Graph</h2>
-            <span>Click nodes to inspect local context</span>
+            <div>
+              <h2>Flow Graph</h2>
+              <span>Click nodes to inspect local context</span>
+            </div>
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={() => {
+                setIsGraphExpanded((current) => !current);
+              }}
+            >
+              {isGraphExpanded ? "Exit Full Screen" : "Expand Graph"}
+            </button>
           </div>
 
           {graphPanelContent}
@@ -993,9 +1066,17 @@ export default function App() {
               <p className="panel-empty">Run analysis to generate dead code candidates.</p>
             )}
           </div>
+        </aside>
+      </main>
 
-          <div className="detail-block">
-            <h3>Query Agent</h3>
+      <section className="panel query-workbench">
+        <div className="panel-header">
+          <h2>Query Agent Workbench</h2>
+          <span>LLM + heuristic reasoning over the latest analysis snapshot</span>
+        </div>
+
+        <div className="query-workbench-grid">
+          <div className="query-workbench-controls">
             <form className="query-form" onSubmit={handleQuerySubmit}>
               <label htmlFor="query-input">Ask a flow question</label>
               <textarea
@@ -1003,7 +1084,7 @@ export default function App() {
                 value={question}
                 onChange={(event) => setQuestion(event.target.value)}
                 placeholder="What happens when user logs in?"
-                rows={3}
+                rows={4}
               />
               <button type="submit" disabled={isQueryLoading || !hasAnalysis}>
                 {isQueryLoading ? "Thinking..." : "Ask Query Agent"}
@@ -1027,7 +1108,9 @@ export default function App() {
             </div>
 
             {queryError ? <p className="query-error">{queryError}</p> : null}
+          </div>
 
+          <div className="query-workbench-result">
             <QueryResult
               answer={queryAnswer}
               onHighlightFlow={highlightFlow}
@@ -1036,8 +1119,8 @@ export default function App() {
               }}
             />
           </div>
-        </aside>
-      </main>
+        </div>
+      </section>
     </div>
   );
 }
