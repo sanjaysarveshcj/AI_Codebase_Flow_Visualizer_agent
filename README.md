@@ -91,6 +91,7 @@ The system follows a **multi-agent architecture**:
 * ✅ Explainable flow traces with confidence scoring
 * ✅ Multi-flow comparison insights from natural-language queries
 * ✅ Step-by-step path playback in graph UI
+* ✅ Auto documentation generation (Markdown, PDF, Swagger-like UI)
 * ✅ Interactive graph-based UI
 * ✅ Scalable for large codebases
 
@@ -118,6 +119,8 @@ Available endpoints:
 * `GET /health`
 * `POST /api/analyze`
 * `POST /api/analyze/query`
+* `POST /api/analyze/docs/generate`
+* `POST /api/analyze/docs/swagger-ui`
 
 Included demo input:
 
@@ -244,6 +247,25 @@ Implemented in this repository:
    * play / pause / step-forward / step-back / reset actions
    * graph highlight progression for node and edge path traversal
 
+### Module 8: Auto Documentation Generator (Completed)
+
+Implemented in this repository:
+
+* Documentation generation endpoint: `POST /api/analyze/docs/generate`
+* Swagger-like UI endpoint: `POST /api/analyze/docs/swagger-ui`
+* Outputs include:
+
+   * Markdown API + architecture + flow documentation
+   * OpenAPI JSON spec generated from detected Express routes
+   * Mermaid flow diagram text for linked execution paths
+   * PDF export (base64 payload)
+   * Swagger-style HTML preview payload
+* Works with either:
+
+   * a full analysis payload from `POST /api/analyze`
+   * filesystem target path
+   * uploaded source files (`sourceFiles`)
+
 ---
 
 ## 🧪 Example Flow Output
@@ -305,6 +327,7 @@ ai-flow-visualizer/
 │   │   ├── flowAgent.js
 │   │   ├── graphBuilderAgent.js
 │   │   ├── queryAgent.js
+│   │   ├── documentationAgent.js
 │   │
 │   ├── utils/
 │   │   ├── astParser.js
@@ -359,6 +382,34 @@ curl -X POST http://localhost:4000/api/analyze \
 # Open UI
 http://localhost:5173
 ```
+
+### 5️⃣ Generate Auto Documentation
+
+Generate full docs package (Markdown + OpenAPI + Mermaid + PDF + Swagger HTML):
+
+```bash
+curl -X POST http://localhost:4000/api/analyze/docs/generate \
+   -H "Content-Type: application/json" \
+   -d '{
+      "targetPath":"D:/AI_Codebase_Flow_Visualizer/AI_Codebase_Flow_Visualizer_agent/sample-project",
+      "title":"Sample Project Auto Docs",
+      "includePdf":true,
+      "maxFlows":12
+   }'
+```
+
+Render Swagger-like UI directly from analyzed routes:
+
+```bash
+curl -X POST http://localhost:4000/api/analyze/docs/swagger-ui \
+   -H "Content-Type: application/json" \
+   -d '{
+      "targetPath":"D:/AI_Codebase_Flow_Visualizer/AI_Codebase_Flow_Visualizer_agent/sample-project",
+      "title":"Sample Project Swagger"
+   }'
+```
+
+Note: Use an absolute `targetPath` to avoid path-resolution issues across different server launch directories.
 
 ---
 

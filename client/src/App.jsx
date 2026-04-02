@@ -24,6 +24,7 @@ const PLAYBACK_INTERVAL_MS = 1100;
 const SOURCE_FILE_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"]);
 const UPLOAD_MAX_FILE_COUNT = 1400;
 const UPLOAD_MAX_TOTAL_BYTES = 16 * 1024 * 1024;
+const DEFAULT_DOC_TITLE = "AI Flow Visualizer Auto Docs";
 const DIRECTORY_INPUT_ATTRIBUTES = {
   webkitdirectory: "",
   directory: ""
@@ -131,6 +132,37 @@ function confidenceBadgeClass(level) {
   }
 
   return "confidence-badge confidence-low";
+}
+
+function slugifyFileName(value, fallbackName) {
+  const candidate = (value || "").toString().trim().toLowerCase();
+  const slug = candidate.replaceAll(/[^a-z0-9]+/g, "-").replaceAll(/(^-|-$)/g, "");
+  return slug || fallbackName;
+}
+
+function downloadBlob(blob, fileName) {
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = fileName;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+
+  setTimeout(() => {
+    URL.revokeObjectURL(objectUrl);
+  }, 3000);
+}
+
+function decodeBase64ToBlob(base64Value, mimeType) {
+  const binary = globalThis.atob(base64Value);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.codePointAt(index) || 0;
+  }
+
+  return new Blob([bytes], { type: mimeType });
 }
 
 function findStepNodeId(step, nodes, usedNodeIds) {
@@ -602,6 +634,206 @@ QueryResult.propTypes = {
   onAskSuggestion: PropTypes.func.isRequired
 };
 
+function DocumentationWorkbench({ analysis, hasAnalysis, sourceLabel }) {
+  const [docsTitle, setDocsTitle] = useState(DEFAULT_DOC_TITLE);
+  const [docsPackage, setDocsPackage] = useState(null);
+  const [docsError, setDocsError] = useState("");
+  const [isDocsLoading, setIsDocsLoading] = useState(false);
+
+  const baseFileName = useMemo(
+    () => slugifyFileName(docsTitle, "ai-flow-visualizer-docs"),
+    [docsTitle]
+  );
+
+  async function generateDocs(includePdf) {
+    if (!hasAnalysis || !analysis) {
+      setDocsError("Run analysis before generating documentation.");
+      return null;
+    }
+
+    setIsDocsLoading(true);
+    setDocsError("");
+
+    try {
+      const response = await fetch("/api/analyze/docs/generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          title: docsTitle.trim() || DEFAULT_DOC_TITLE,
+          analysis,
+          includePdf,
+          maxFlows: 18
+        })
+      });
+
+      const payload = await response.json();
+      assertApiSuccess(response, payload, "Documentation generation failed");
+
+      setDocsPackage(payload.documentation);
+      return payload.documentation;
+    } catch (requestError) {
+      setDocsPackage(null);
+      setDocsError(requestError.message);
+      return null;
+    } finally {
+      setIsDocsLoading(false);
+    }
+  }
+
+  async function handleGenerateClick() {
+    await generateDocs(true);
+  }
+
+  async function handleDownloadMarkdown() {
+    const docs = docsPackage || (await generateDocs(false));
+    if (!docs?.markdown) {
+      return;
+    }
+
+    downloadBlob(
+      new Blob([docs.markdown], { type: "text/markdown;charset=utf-8" }),
+      `${baseFileName}.md`
+    );
+  }
+
+  async function handleDownloadPdf() {
+    const docs = docsPackage || (await generateDocs(true));
+    if (!docs?.pdfBase64) {
+      setDocsError("PDF output is not available. Generate docs with PDF enabled.");
+      return;
+    }
+
+    const pdfBlob = decodeBase64ToBlob(docs.pdfBase64, "application/pdf");
+    const pdfName = docs.pdfFileName || `${baseFileName}.pdf`;
+    downloadBlob(pdfBlob, pdfName);
+  }
+
+  async function handleOpenSwaggerPreview() {
+    const docs = docsPackage || (await generateDocs(false));
+    if (!docs?.swaggerUiHtml) {
+      return;
+    }
+
+    const swaggerBlob = new Blob([docs.swaggerUiHtml], { type: "text/html;charset=utf-8" });
+    const swaggerUrl = URL.createObjectURL(swaggerBlob);
+    const popup = globalThis.open(swaggerUrl, "_blank", "noopener,noreferrer");
+
+    if (!popup) {
+      setDocsError("Popup was blocked. Allow popups and try opening Swagger preview again.");
+      return;
+    }
+
+    setTimeout(() => {
+      URL.revokeObjectURL(swaggerUrl);
+    }, 60000);
+  }
+
+  const routeCount = docsPackage?.openapi?.paths
+    ? Object.keys(docsPackage.openapi.paths).length
+    : 0;
+
+  return (
+    <section className="panel docs-workbench">
+      <div className="panel-header">
+        <div>
+          <h2>Auto Documentation Generator</h2>
+          <span>Build Markdown, PDF, and Swagger-like docs from the latest analysis</span>
+        </div>
+      </div>
+
+      <div className="docs-controls-grid">
+        <label htmlFor="docs-title-input">Document Title</label>
+        <input
+          id="docs-title-input"
+          value={docsTitle}
+          onChange={(event) => {
+            setDocsTitle(event.target.value);
+          }}
+          placeholder={DEFAULT_DOC_TITLE}
+          disabled={isDocsLoading}
+        />
+      </div>
+
+      <div className="docs-actions-row">
+        <button
+          type="button"
+          className="query-action"
+          onClick={() => {
+            void handleGenerateClick();
+          }}
+          disabled={!hasAnalysis || isDocsLoading}
+        >
+          {isDocsLoading ? "Generating..." : "Generate Docs"}
+        </button>
+        <button
+          type="button"
+          className="query-action"
+          onClick={() => {
+            void handleDownloadMarkdown();
+          }}
+          disabled={!hasAnalysis || isDocsLoading}
+        >
+          Download Markdown
+        </button>
+        <button
+          type="button"
+          className="query-action"
+          onClick={() => {
+            void handleDownloadPdf();
+          }}
+          disabled={!hasAnalysis || isDocsLoading}
+        >
+          Download PDF
+        </button>
+        <button
+          type="button"
+          className="query-action"
+          onClick={() => {
+            void handleOpenSwaggerPreview();
+          }}
+          disabled={!hasAnalysis || isDocsLoading}
+        >
+          Open Swagger Preview
+        </button>
+      </div>
+
+      {docsError ? <p className="query-error">{docsError}</p> : null}
+
+      <div className="docs-summary-grid">
+        <div>
+          <span>Source</span>
+          <strong>{sourceLabel || "filesystem-path"}</strong>
+        </div>
+        <div>
+          <span>Routes in OpenAPI</span>
+          <strong>{routeCount || "-"}</strong>
+        </div>
+        <div>
+          <span>Markdown Size</span>
+          <strong>{docsPackage?.markdown ? `${docsPackage.markdown.length} chars` : "-"}</strong>
+        </div>
+        <div>
+          <span>Generated</span>
+          <strong>{docsPackage?.generatedAt ? new Date(docsPackage.generatedAt).toLocaleString() : "-"}</strong>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+DocumentationWorkbench.propTypes = {
+  analysis: PropTypes.object,
+  hasAnalysis: PropTypes.bool.isRequired,
+  sourceLabel: PropTypes.string
+};
+
+DocumentationWorkbench.defaultProps = {
+  analysis: null,
+  sourceLabel: ""
+};
+
 function renderFlowPanelContent(hasAnalysis, flows, activeFlowId, onSelectFlow) {
   if (!hasAnalysis) {
     return <p className="panel-empty">Run an analysis to populate connected flows.</p>;
@@ -949,6 +1181,23 @@ export default function App() {
     }
   );
 
+  let uploadStatusContent = (
+    <p className="upload-status">Or upload a project folder to analyze directly in browser.</p>
+  );
+
+  if (isUploadPreparing) {
+    uploadStatusContent = (
+      <p className="upload-status">Reading selected folder and preparing source payload...</p>
+    );
+  } else if (uploadedSourceFiles.length > 0) {
+    uploadStatusContent = (
+      <p className="upload-status">
+        Using uploaded folder <strong>{uploadedSourceLabel}</strong> with {uploadedSourceFiles.length} source files.
+        {uploadSummary ? ` ${uploadSummary}.` : ""}
+      </p>
+    );
+  }
+
   return (
     <div className="app-shell">
       <div className="bg-orb bg-orb-1" />
@@ -1019,16 +1268,7 @@ export default function App() {
             ) : null}
           </div>
 
-          {isUploadPreparing ? (
-            <p className="upload-status">Reading selected folder and preparing source payload...</p>
-          ) : uploadedSourceFiles.length > 0 ? (
-            <p className="upload-status">
-              Using uploaded folder <strong>{uploadedSourceLabel}</strong> with {uploadedSourceFiles.length} source files.
-              {uploadSummary ? ` ${uploadSummary}.` : ""}
-            </p>
-          ) : (
-            <p className="upload-status">Or upload a project folder to analyze directly in browser.</p>
-          )}
+          {uploadStatusContent}
         </form>
 
         <div className="metrics-grid">
@@ -1314,6 +1554,12 @@ export default function App() {
           </div>
         </div>
       </section>
+
+      <DocumentationWorkbench
+        analysis={analysis}
+        hasAnalysis={hasAnalysis}
+        sourceLabel={uploadedSourceLabel || targetPath}
+      />
     </div>
   );
 }
