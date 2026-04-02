@@ -8,7 +8,7 @@ const app = express();
 const PORT = Number(process.env.PORT || 4000);
 
 app.use(cors());
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "20mb" }));
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "ai-flow-visualizer-server" });

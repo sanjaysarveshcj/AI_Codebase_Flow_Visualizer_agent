@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import {
   Background,
@@ -21,6 +21,21 @@ const QUICK_QUESTIONS = [
   "Show dead code candidates"
 ];
 const PLAYBACK_INTERVAL_MS = 1100;
+const SOURCE_FILE_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"]);
+const UPLOAD_MAX_FILE_COUNT = 1400;
+const UPLOAD_MAX_TOTAL_BYTES = 16 * 1024 * 1024;
+const DIRECTORY_INPUT_ATTRIBUTES = {
+  webkitdirectory: "",
+  directory: ""
+};
+const IGNORED_UPLOAD_SEGMENTS = [
+  "/node_modules/",
+  "/dist/",
+  "/build/",
+  "/.next/",
+  "/coverage/",
+  "/.git/"
+];
 
 const EXECUTION_TO_NODE_TYPE = {
   frontend_api: "api_call",
@@ -33,6 +48,77 @@ const EXECUTION_TO_NODE_TYPE = {
 
 function normalizeLabel(value) {
   return (value || "").toString().trim().toLowerCase();
+}
+
+function normalizeUploadPath(relativePath) {
+  if (!relativePath) {
+    return "";
+  }
+
+  return relativePath
+    .toString()
+    .replaceAll("\\", "/")
+    .replace(/^\/+/, "")
+    .trim();
+}
+
+function shouldIgnoreUploadedPath(relativePath) {
+  const normalized = `/${normalizeUploadPath(relativePath)}`;
+
+  return IGNORED_UPLOAD_SEGMENTS.some((segment) => normalized.includes(segment));
+}
+
+function hasSupportedSourceExtension(relativePath) {
+  const normalized = normalizeUploadPath(relativePath);
+  const extension = normalized.includes(".")
+    ? `.${normalized.split(".").pop().toLowerCase()}`
+    : "";
+
+  return SOURCE_FILE_EXTENSIONS.has(extension);
+}
+
+async function buildUploadedSourcePayload(fileList) {
+  const files = Array.from(fileList || []);
+  const sourceFiles = [];
+  let skippedFiles = 0;
+  let totalBytes = 0;
+
+  for (const file of files) {
+    const relativePath = normalizeUploadPath(file.webkitRelativePath || file.name);
+
+    if (!relativePath || shouldIgnoreUploadedPath(relativePath) || !hasSupportedSourceExtension(relativePath)) {
+      skippedFiles += 1;
+      continue;
+    }
+
+    totalBytes += Number(file.size || 0);
+
+    if (sourceFiles.length >= UPLOAD_MAX_FILE_COUNT) {
+      throw new Error(`Upload limit reached (${UPLOAD_MAX_FILE_COUNT} files).`);
+    }
+
+    if (totalBytes > UPLOAD_MAX_TOTAL_BYTES) {
+      throw new Error("Uploaded source files are too large. Keep total source under 16MB.");
+    }
+
+    sourceFiles.push({
+      relativePath,
+      content: await file.text()
+    });
+  }
+
+  if (sourceFiles.length === 0) {
+    throw new Error("No supported source files found in uploaded folder.");
+  }
+
+  const firstPath = sourceFiles[0]?.relativePath || "uploaded-folder";
+  const sourceLabel = firstPath.includes("/") ? firstPath.split("/")[0] : "uploaded-folder";
+
+  return {
+    sourceFiles,
+    sourceLabel,
+    skippedFiles
+  };
 }
 
 function confidenceBadgeClass(level) {
@@ -488,7 +574,6 @@ function QueryResult({ answer, onHighlightFlow, onAskSuggestion }) {
   }
 
   const answerText = (answer.answerText || "").trim();
-  const llmMeta = [answer.llmProvider, answer.llmModel].filter(Boolean).join(" · ");
 
   return (
     <div className="query-answer-stack">
@@ -496,7 +581,6 @@ function QueryResult({ answer, onHighlightFlow, onAskSuggestion }) {
         <div className="llm-answer-block">
           <p className="llm-answer-title">Answer</p>
           <p className="llm-answer-text">{answerText}</p>
-          {llmMeta ? <p className="llm-answer-meta">{llmMeta}</p> : null}
         </div>
       ) : null}
       {typedContent}
@@ -617,6 +701,7 @@ function highlightFirstMatchedFlow(answer, onHighlightFlow) {
 }
 
 export default function App() {
+  const folderInputRef = useRef(null);
   const [targetPath, setTargetPath] = useState(DEFAULT_TARGET_PATH);
   const [analysis, setAnalysis] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -630,6 +715,10 @@ export default function App() {
   const [isPlaybackRunning, setIsPlaybackRunning] = useState(false);
   const [playbackIndex, setPlaybackIndex] = useState(0);
   const [isGraphExpanded, setIsGraphExpanded] = useState(false);
+  const [uploadedSourceFiles, setUploadedSourceFiles] = useState([]);
+  const [uploadedSourceLabel, setUploadedSourceLabel] = useState("");
+  const [uploadSummary, setUploadSummary] = useState("");
+  const [isUploadPreparing, setIsUploadPreparing] = useState(false);
 
   const flows = analysis?.flows?.items || [];
   const hasAnalysis = Boolean(analysis);
@@ -705,19 +794,74 @@ export default function App() {
     [analysis, activeFlowId, activeNodeId, playbackHighlight]
   );
 
+  function resetUploadedSource() {
+    setUploadedSourceFiles([]);
+    setUploadedSourceLabel("");
+    setUploadSummary("");
+
+    if (folderInputRef.current) {
+      folderInputRef.current.value = "";
+    }
+  }
+
+  async function handleFolderUpload(event) {
+    const selectedFiles = event.target?.files;
+
+    if (!selectedFiles || selectedFiles.length === 0) {
+      return;
+    }
+
+    setIsUploadPreparing(true);
+
+    try {
+      const payload = await buildUploadedSourcePayload(selectedFiles);
+      setUploadedSourceFiles(payload.sourceFiles);
+      setUploadedSourceLabel(payload.sourceLabel);
+      setUploadSummary(
+        payload.skippedFiles > 0
+          ? `${payload.skippedFiles} non-source files skipped`
+          : ""
+      );
+      setError("");
+    } catch (uploadError) {
+      resetUploadedSource();
+      setError(uploadError.message);
+    } finally {
+      setIsUploadPreparing(false);
+      if (event.target) {
+        event.target.value = "";
+      }
+    }
+  }
+
   async function runAnalysis(event) {
     event.preventDefault();
+
+    if (isUploadPreparing) {
+      setError("Upload is still being prepared. Please wait a moment and try Analyze again.");
+      return;
+    }
 
     setIsLoading(true);
     setError("");
 
     try {
+      const analyzePayload =
+        uploadedSourceFiles.length > 0
+          ? {
+              sourceFiles: uploadedSourceFiles,
+              sourceLabel: uploadedSourceLabel || "uploaded-folder"
+            }
+          : {
+              targetPath
+            };
+
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ targetPath })
+        body: JSON.stringify(analyzePayload)
       });
 
       const payload = await response.json();
@@ -811,8 +955,9 @@ export default function App() {
       <div className="bg-orb bg-orb-2" />
 
       <header className="hero">
-        <p className="eyebrow">Module 7 · Confidence Calibration + Compare + Playback</p>
-        <h1>Trace Full-Stack Execution Like a Transit Map</h1>
+        <p className="eyebrow">Confidence Calibration + Compare + Playback</p>
+        <h1>AI-Powered Codebase Flow Visualizer</h1>
+        <h2>Trace Full-Stack Execution Like a Transit Map</h2>
         <p className="hero-copy">
           Analyze any MERN project path, render API-to-route-to-model links, and
           ask natural-language questions to jump directly to the relevant flow,
@@ -828,7 +973,9 @@ export default function App() {
             <input
               id="target-path"
               value={targetPath}
-              onChange={(event) => setTargetPath(event.target.value)}
+              onChange={(event) => {
+                setTargetPath(event.target.value);
+              }}
               placeholder="../sample-project"
               autoComplete="off"
             />
@@ -836,6 +983,52 @@ export default function App() {
               {isLoading ? "Analyzing..." : "Analyze Codebase"}
             </button>
           </div>
+
+          <div className="upload-row">
+            <input
+              ref={folderInputRef}
+              type="file"
+              className="folder-upload-input"
+              multiple
+              onChange={(event) => {
+                void handleFolderUpload(event);
+              }}
+              {...DIRECTORY_INPUT_ATTRIBUTES}
+            />
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={() => {
+                folderInputRef.current?.click();
+              }}
+              disabled={isLoading || isUploadPreparing}
+            >
+              {isUploadPreparing ? "Preparing Upload..." : "Upload Project Folder"}
+            </button>
+            {uploadedSourceFiles.length > 0 ? (
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => {
+                  resetUploadedSource();
+                }}
+                disabled={isLoading || isUploadPreparing}
+              >
+                Use Path Instead
+              </button>
+            ) : null}
+          </div>
+
+          {isUploadPreparing ? (
+            <p className="upload-status">Reading selected folder and preparing source payload...</p>
+          ) : uploadedSourceFiles.length > 0 ? (
+            <p className="upload-status">
+              Using uploaded folder <strong>{uploadedSourceLabel}</strong> with {uploadedSourceFiles.length} source files.
+              {uploadSummary ? ` ${uploadSummary}.` : ""}
+            </p>
+          ) : (
+            <p className="upload-status">Or upload a project folder to analyze directly in browser.</p>
+          )}
         </form>
 
         <div className="metrics-grid">

@@ -6,6 +6,14 @@ const traverse = require("@babel/traverse").default;
 
 const VALID_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"]);
 const HTTP_METHODS = new Set(["get", "post", "put", "patch", "delete", "all", "use"]);
+const IGNORED_UPLOAD_SEGMENTS = [
+  "/node_modules/",
+  "/dist/",
+  "/build/",
+  "/.next/",
+  "/coverage/",
+  "/.git/",
+];
 const MONGOOSE_OPERATION_METHODS = new Set([
   "find",
   "findOne",
@@ -125,6 +133,31 @@ function safeRelative(targetPath, absoluteFilePath) {
   return relative || path.basename(absoluteFilePath);
 }
 
+function shouldIgnoreRelativePath(relativeFilePath) {
+  if (!relativeFilePath) {
+    return true;
+  }
+
+  const normalized = `/${relativeFilePath.replaceAll("\\", "/")}`;
+
+  return IGNORED_UPLOAD_SEGMENTS.some((segment) => normalized.includes(segment));
+}
+
+function normalizeUploadedRelativePath(relativeFilePath) {
+  if (!relativeFilePath || typeof relativeFilePath !== "string") {
+    return null;
+  }
+
+  const normalized = relativeFilePath.replaceAll("\\", "/").replace(/^\/+/, "");
+  const safePath = path.posix.normalize(normalized);
+
+  if (!safePath || safePath === "." || safePath.startsWith("../")) {
+    return null;
+  }
+
+  return safePath;
+}
+
 function extractFrontendApiCalls(ast, targetPath, filePath) {
   const calls = [];
 
@@ -171,6 +204,39 @@ function extractFrontendApiCalls(ast, targetPath, filePath) {
 
 function extractExpressRoutes(ast, targetPath, filePath) {
   const routes = [];
+  const routeReceivers = new Set(["router", "app"]);
+
+  // Discover custom Express app/router variable names used in this file.
+  traverse(ast, {
+    VariableDeclarator(pathNode) {
+      const declaration = pathNode.node;
+      if (declaration.id?.type !== "Identifier") {
+        return;
+      }
+
+      const variableName = declaration.id.name;
+      const init = declaration.init;
+
+      if (init?.type !== "CallExpression") {
+        return;
+      }
+
+      if (
+        init.callee?.type === "MemberExpression" &&
+        init.callee.object?.type === "Identifier" &&
+        init.callee.object.name === "express" &&
+        init.callee.property?.type === "Identifier" &&
+        init.callee.property.name === "Router"
+      ) {
+        routeReceivers.add(variableName);
+        return;
+      }
+
+      if (init.callee?.type === "Identifier" && ["express", "Router"].includes(init.callee.name)) {
+        routeReceivers.add(variableName);
+      }
+    },
+  });
 
   traverse(ast, {
     CallExpression(pathNode) {
@@ -184,16 +250,36 @@ function extractExpressRoutes(ast, targetPath, filePath) {
       const receiverName = callee.object?.name;
       const methodName = callee.property?.name;
 
-      if (!["router", "app"].includes(receiverName) || !HTTP_METHODS.has(methodName)) {
+      let routePath = null;
+
+      if (routeReceivers.has(receiverName) && HTTP_METHODS.has(methodName)) {
+        routePath = getStringArg(callNode.arguments[0]);
+      }
+
+      // Support chained style: router.route('/x').get(handler)
+      if (
+        !routePath &&
+        HTTP_METHODS.has(methodName) &&
+        callee.object?.type === "CallExpression" &&
+        callee.object.callee?.type === "MemberExpression" &&
+        callee.object.callee.object?.type === "Identifier" &&
+        routeReceivers.has(callee.object.callee.object.name) &&
+        callee.object.callee.property?.type === "Identifier" &&
+        callee.object.callee.property.name === "route"
+      ) {
+        routePath = getStringArg(callee.object.arguments?.[0]);
+      }
+
+      if (!routePath || !HTTP_METHODS.has(methodName)) {
         return;
       }
 
-      const routePath = getStringArg(callNode.arguments[0]);
-      if (!routePath) {
-        return;
-      }
+      const isChainedRouteCall =
+        callee.object?.type === "CallExpression" &&
+        callee.object.callee?.type === "MemberExpression" &&
+        callee.object.callee.property?.name === "route";
 
-      const handlerNodes = callNode.arguments.slice(1);
+      const handlerNodes = isChainedRouteCall ? callNode.arguments : callNode.arguments.slice(1);
       if (handlerNodes.length === 0) {
         return;
       }
@@ -204,7 +290,7 @@ function extractExpressRoutes(ast, targetPath, filePath) {
 
       routes.push({
         type: "express_route",
-        layer: receiverName,
+        layer: receiverName || "router",
         method: methodName.toUpperCase(),
         path: routePath,
         handler,
@@ -399,13 +485,12 @@ function extractMongooseOperations(ast, targetPath, filePath) {
   return operations;
 }
 
-function parseFile(targetPath, filePath) {
+function parseSourceFile(targetPath, filePath, source) {
   const extension = path.extname(filePath).toLowerCase();
   if (!VALID_EXTENSIONS.has(extension)) {
     return null;
   }
 
-  const source = fs.readFileSync(filePath, "utf8");
   const ast = parseToAst(source);
 
   return {
@@ -417,6 +502,11 @@ function parseFile(targetPath, filePath) {
     functionDefinitions: extractFunctionDefinitions(ast, targetPath, filePath),
     functionInvocations: extractFunctionInvocations(ast, targetPath, filePath),
   };
+}
+
+function parseFile(targetPath, filePath) {
+  const source = fs.readFileSync(filePath, "utf8");
+  return parseSourceFile(targetPath, filePath, source);
 }
 
 function parseCodebase(targetPath) {
@@ -469,6 +559,67 @@ function parseCodebase(targetPath) {
   return summary;
 }
 
+function parseCodebaseFromSourceFiles(sourceFiles, options = {}) {
+  const rootLabel = options.sourceLabel || "uploaded-codebase";
+  const virtualRoot = path.resolve(process.cwd(), rootLabel);
+
+  const summary = {
+    filesScanned: 0,
+    frontendApiCalls: [],
+    expressRoutes: [],
+    reactRoutes: [],
+    mongooseModels: [],
+    mongooseOperations: [],
+    functionDefinitions: [],
+    functionInvocations: [],
+    errors: [],
+  };
+
+  for (const entry of sourceFiles || []) {
+    const rawPath = entry?.relativePath;
+    const source = typeof entry?.content === "string" ? entry.content : "";
+    const relativePath = normalizeUploadedRelativePath(rawPath);
+
+    if (!relativePath) {
+      summary.errors.push({
+        filePath: rawPath || "unknown",
+        message: "Invalid relative path in uploaded file",
+      });
+      continue;
+    }
+
+    if (shouldIgnoreRelativePath(relativePath)) {
+      continue;
+    }
+
+    const absoluteVirtualPath = path.resolve(virtualRoot, relativePath);
+    summary.filesScanned += 1;
+
+    try {
+      const parsed = parseSourceFile(virtualRoot, absoluteVirtualPath, source);
+      if (!parsed) {
+        continue;
+      }
+
+      summary.frontendApiCalls.push(...parsed.frontendApiCalls);
+      summary.expressRoutes.push(...parsed.expressRoutes);
+      summary.reactRoutes.push(...parsed.reactRoutes);
+      summary.mongooseModels.push(...parsed.mongooseModels);
+      summary.mongooseOperations.push(...parsed.mongooseOperations);
+      summary.functionDefinitions.push(...parsed.functionDefinitions);
+      summary.functionInvocations.push(...parsed.functionInvocations);
+    } catch (error) {
+      summary.errors.push({
+        filePath: relativePath,
+        message: error.message,
+      });
+    }
+  }
+
+  return summary;
+}
+
 module.exports = {
   parseCodebase,
+  parseCodebaseFromSourceFiles,
 };

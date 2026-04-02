@@ -134,6 +134,33 @@ body {
   gap: 0.7rem;
 }
 
+.upload-row {
+  margin-top: 0.68rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.folder-upload-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.upload-status {
+  margin: 0.58rem 0 0;
+  color: var(--ink-faint);
+  font-size: 0.79rem;
+  line-height: 1.4;
+}
+
+.upload-status strong {
+  color: #0f172a;
+}
+
 .form-row input {
   flex: 1;
   border-radius: 12px;
