@@ -36,7 +36,65 @@ const TOKEN_ALIASES = new Map([
   ["authentication", "auth"],
   ["authorize", "auth"],
   ["authorization", "auth"],
+  ["payments", "payment"],
+  ["checkout", "payment"],
+  ["billing", "payment"],
+  ["invoices", "invoice"],
+  ["transactions", "transaction"],
+  ["projects", "project"],
+  ["profiles", "profile"],
+  ["notifications", "notification"],
 ]);
+
+const INTENT_CATALOG = [
+  {
+    name: "auth",
+    keywords: ["auth", "login", "register", "token", "signin", "signup", "session"],
+    flowSignals: ["auth", "login", "register", "token", "signin", "signup", "session"],
+  },
+  {
+    name: "project",
+    keywords: ["project", "workspace", "editor", "status", "collaboration"],
+    flowSignals: ["project", "projects", "workspace", "status", "editor", "projectcontroller"],
+  },
+  {
+    name: "profile",
+    keywords: ["profile", "account", "user", "settings"],
+    flowSignals: ["profile", "account", "user", "settings"],
+  },
+  {
+    name: "payment",
+    keywords: [
+      "payment",
+      "checkout",
+      "billing",
+      "invoice",
+      "transaction",
+      "refund",
+      "charge",
+      "subscription",
+      "wallet",
+    ],
+    flowSignals: [
+      "payment",
+      "checkout",
+      "billing",
+      "invoice",
+      "transaction",
+      "refund",
+      "charge",
+      "subscription",
+      "wallet",
+      "order",
+      "cart",
+    ],
+  },
+  {
+    name: "notification",
+    keywords: ["notification", "alert", "message", "email", "sms"],
+    flowSignals: ["notification", "alert", "message", "email", "sms"],
+  },
+];
 
 const ALLOWED_ANSWER_TYPES = new Set([
   "summary",
@@ -144,10 +202,12 @@ function getFlowScore(flow, questionTokens, loweredQuestion) {
   const flowTokens = new Set(tokenize(searchable));
 
   let score = 0;
+  let evidenceHits = 0;
 
   for (const token of questionTokens) {
     if (flowTokens.has(token)) {
       score += 2;
+      evidenceHits += 1;
     }
   }
 
@@ -156,21 +216,182 @@ function getFlowScore(flow, questionTokens, loweredQuestion) {
 
   if (endpoint && loweredQuestion.includes(endpoint)) {
     score += 6;
+    evidenceHits += 1;
   }
 
   if (routePath && loweredQuestion.includes(routePath)) {
     score += 6;
+    evidenceHits += 1;
   }
 
   if (/login|signin|signup|auth|token/.test(loweredQuestion)) {
     if (/login|signin|signup|auth|token/.test(`${endpoint} ${routePath}`)) {
       score += 3;
+      evidenceHits += 1;
     }
+  }
+
+  if (evidenceHits > 0) {
+    score += (flow.confidence?.score || 0) * 2;
+  }
+
+  return score;
+}
+
+function isIntentFlowQuery(loweredQuestion) {
+  return /flow|path|journey|trace|what happens|show me|walk( me)? through/.test(
+    loweredQuestion
+  );
+}
+
+function detectIntentCandidates(question) {
+  const lowered = normalizeText(question);
+  const questionTokens = tokenize(question);
+
+  return INTENT_CATALOG.map((intent) => {
+    let score = 0;
+    const matchedTerms = [];
+
+    for (const keyword of intent.keywords) {
+      if (questionTokens.includes(keyword)) {
+        score += 2;
+        matchedTerms.push(keyword);
+        continue;
+      }
+
+      if (lowered.includes(keyword)) {
+        score += 1;
+        matchedTerms.push(keyword);
+      }
+    }
+
+    const contextualPattern = new RegExp(
+      String.raw`(?:${intent.keywords.join("|")})\s+(?:flow|path|journey)|(?:flow|path|journey)\s+(?:${intent.keywords.join("|")})`,
+      "i"
+    );
+
+    if (contextualPattern.test(question)) {
+      score += 2;
+    }
+
+    return {
+      intent,
+      score,
+      confidence: Number(Math.min(1, score / 8).toFixed(2)),
+      matchedTerms: [...new Set(matchedTerms)],
+    };
+  })
+    .filter((candidate) => candidate.score >= 2)
+    .sort((left, right) => right.score - left.score);
+}
+
+function scoreFlowForIntent(flow, intentCandidate, questionTokens) {
+  const searchable = flowToSearchText(flow);
+  const flowTokens = new Set(tokenize(searchable));
+
+  let score = 0;
+  let intentHits = 0;
+
+  for (const signal of intentCandidate.intent.flowSignals) {
+    if (flowTokens.has(signal)) {
+      score += 2;
+      intentHits += 1;
+    }
+  }
+
+  for (const token of questionTokens) {
+    if (flowTokens.has(token)) {
+      score += 1;
+    }
+  }
+
+  if (intentHits === 0) {
+    return 0;
   }
 
   score += (flow.confidence?.score || 0) * 2;
 
   return score;
+}
+
+function findIntentBasedFlows(analysis, question) {
+  const flows = analysis.flows?.items || [];
+  const questionTokens = tokenize(question);
+  const intentCandidates = detectIntentCandidates(question);
+
+  if (intentCandidates.length === 0) {
+    return null;
+  }
+
+  for (const candidate of intentCandidates.slice(0, 3)) {
+    const matchedFlows = flows
+      .map((flow) => ({
+        flow,
+        score: scoreFlowForIntent(flow, candidate, questionTokens),
+      }))
+      .filter((entry) => entry.score >= 3)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 5)
+      .map((entry) => entry.flow);
+
+    if (matchedFlows.length > 0) {
+      return {
+        intent: candidate,
+        flows: matchedFlows,
+        alternatives: intentCandidates.slice(0, 3),
+      };
+    }
+  }
+
+  return {
+    intent: intentCandidates[0],
+    flows: [],
+    alternatives: intentCandidates.slice(0, 3),
+  };
+}
+
+function buildIntentFallbackAnswer(intentMatch) {
+  return {
+    type: "fallback",
+    data: {
+      message: `Detected intent '${intentMatch.intent.intent.name}', but no direct flow match was found in this analysis.`,
+      suggestions: [
+        "Give me a summary of this codebase flow",
+        "Which routes are related to auth?",
+        "Show project-related flows",
+        "Explain flow for /api/auth/profile",
+        "Compare login and profile flows",
+      ],
+    },
+    highlights: getHighlightMeta([]),
+  };
+}
+
+function resolveIntentFlowAnswer(analysis, question, loweredQuestion) {
+  if (!isIntentFlowQuery(loweredQuestion)) {
+    return null;
+  }
+
+  const intentMatch = findIntentBasedFlows(analysis, question);
+
+  if (intentMatch?.flows?.length > 0) {
+    return {
+      type: "flow_match",
+      data: intentMatch.flows,
+      highlights: getHighlightMeta(intentMatch.flows),
+      intent: {
+        name: intentMatch.intent.intent.name,
+        confidence: intentMatch.intent.confidence,
+        matchedTerms: intentMatch.intent.matchedTerms,
+      },
+    };
+  }
+
+  if (intentMatch?.intent) {
+    return buildIntentFallbackAnswer(intentMatch);
+  }
+
+  return null;
 }
 
 function findFlowForKeyword(analysis, question) {
@@ -417,6 +638,11 @@ function answerQuestionHeuristic(question, analysis) {
     };
   }
 
+  const intentAnswer = resolveIntentFlowAnswer(analysis, question, lowered);
+  if (intentAnswer) {
+    return intentAnswer;
+  }
+
   const relatedFlows = findFlowForKeyword(analysis, question);
   if (relatedFlows.length > 0) {
     return {
@@ -453,27 +679,35 @@ function getFlowIndex(analysis) {
   return flowMap;
 }
 
+function truncateText(value, maxLength = 120) {
+  const text = (value || "").toString();
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
 function summarizeFlowForLlm(flow) {
   return {
     id: flow.id,
-    entry: {
-      method: flow.frontendAction?.method,
-      endpoint: flow.frontendAction?.endpoint,
+    entry: truncateText(
+      `${flow.frontendAction?.method || "GET"} ${flow.frontendAction?.endpoint || ""}`,
+      88
+    ),
+    route: truncateText(
+      `${flow.backendRoute?.method || "GET"} ${flow.backendRoute?.path || ""}`,
+      88
+    ),
+    confidence: {
+      score: flow.confidence?.score || 0,
+      level: flow.confidence?.level || "low",
     },
-    route: {
-      method: flow.backendRoute?.method,
-      path: flow.backendRoute?.path,
-      handler: flow.backendRoute?.handler,
-    },
-    confidence: flow.confidence || null,
-    middlewareChain: flow.middlewareChain || [],
-    helperFunctions: flow.indirectFunctions || [],
-    databaseOperations: (flow.databaseOperations || []).map((operation) => ({
-      model: operation.model,
-      operation: operation.operation,
-      functionName: operation.functionName,
-    })),
-    narrative: flow.narrative || "",
+    middlewareCount: (flow.middlewareChain || []).length,
+    helperCount: (flow.indirectFunctions || []).length,
+    dbOps: (flow.databaseOperations || [])
+      .slice(0, 2)
+      .map((operation) => `${operation.model}.${operation.operation}`),
   };
 }
 
@@ -481,10 +715,17 @@ function buildLlmContext(question, analysis, heuristicAnswer) {
   const flows = analysis.flows?.items || [];
   const topFlows = [...flows]
     .sort((left, right) => (right.confidence?.score || 0) - (left.confidence?.score || 0))
-    .slice(0, 8)
+    .slice(0, 4)
     .map(summarizeFlowForLlm);
 
   const flowHighlights = heuristicAnswer?.highlights?.flowIds || [];
+  const intentCandidates = detectIntentCandidates(question)
+    .slice(0, 3)
+    .map((item) => ({
+      name: item.intent.name,
+      confidence: item.confidence,
+      matchedTerms: item.matchedTerms,
+    }));
 
   return {
     question,
@@ -493,9 +734,10 @@ function buildLlmContext(question, analysis, heuristicAnswer) {
     heuristic: {
       type: heuristicAnswer?.type,
       highlights: flowHighlights,
+      intent: heuristicAnswer?.intent || null,
     },
+    intentCandidates,
     topFlows,
-    allowedAnswerTypes: [...ALLOWED_ANSWER_TYPES],
   };
 }
 
@@ -898,12 +1140,27 @@ function buildLlmPrompts(question, analysis, heuristicAnswer) {
     "If uncertain, return fallback.",
   ].join("\n");
 
-  const userPrompt = JSON.stringify(llmContext, null, 2);
+  const userPrompt = JSON.stringify(llmContext);
 
   return {
     systemPrompt,
     userPrompt,
   };
+}
+
+function extractErrorTextFromApiBody(rawBody) {
+  const parsed = safeParseJson(rawBody);
+  if (parsed && typeof parsed === "object") {
+    const errorMessage =
+      parsed?.error?.message || parsed?.message || parsed?.error_description || "";
+
+    const sanitized = sanitizeAssistantText(errorMessage);
+    if (sanitized) {
+      return sanitized;
+    }
+  }
+
+  return sanitizeAssistantText((rawBody || "").trim());
 }
 
 async function callOpenAiForQuery(config, question, analysis, heuristicAnswer) {
@@ -948,15 +1205,25 @@ async function callOpenAiForQuery(config, question, analysis, heuristicAnswer) {
     });
 
     if (!response.ok) {
-      return null;
+      const rawError = await response.text();
+      return {
+        parsed: null,
+        text: extractErrorTextFromApiBody(rawError),
+      };
     }
 
     const payload = await response.json();
     const text = getResponseText(payload);
 
-    return safeParseJson(text);
+    return {
+      parsed: safeParseJson(text),
+      text,
+    };
   } catch {
-    return null;
+    return {
+      parsed: null,
+      text: "",
+    };
   } finally {
     clearTimeout(timeout);
   }
@@ -988,7 +1255,7 @@ async function callOpenRouterForQuery(config, question, analysis, heuristicAnswe
       body: JSON.stringify({
         model: config.model,
         temperature: 0.1,
-        max_tokens: 700,
+        max_tokens: 500,
         messages: [
           {
             role: "system",
@@ -1004,18 +1271,48 @@ async function callOpenRouterForQuery(config, question, analysis, heuristicAnswe
     });
 
     if (!response.ok) {
-      return null;
+      const rawError = await response.text();
+      return {
+        parsed: null,
+        text: extractErrorTextFromApiBody(rawError),
+      };
     }
 
     const payload = await response.json();
     const text = getChatCompletionText(payload);
 
-    return safeParseJson(text);
+    return {
+      parsed: safeParseJson(text),
+      text,
+    };
   } catch {
-    return null;
+    return {
+      parsed: null,
+      text: "",
+    };
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function extractAnswerTextFromLlmText(rawText) {
+  const parsed = safeParseJson(rawText);
+  if (parsed && typeof parsed === "object") {
+    const fromPayload = sanitizeAssistantText(
+      parsed.answerText || parsed.assistantMessage || parsed.message
+    );
+
+    if (fromPayload) {
+      return fromPayload;
+    }
+  }
+
+  const withoutFence = String(rawText || "")
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "")
+    .trim();
+
+  return sanitizeAssistantText(withoutFence);
 }
 
 async function callLlmForQuery(question, analysis, heuristicAnswer) {
@@ -1024,17 +1321,18 @@ async function callLlmForQuery(question, analysis, heuristicAnswer) {
     return null;
   }
 
-  const answer =
+  const result =
     config.provider === "openrouter"
       ? await callOpenRouterForQuery(config, question, analysis, heuristicAnswer)
       : await callOpenAiForQuery(config, question, analysis, heuristicAnswer);
 
-  if (!answer) {
+  if (!result) {
     return null;
   }
 
   return {
-    answer,
+    answer: result.parsed,
+    answerText: extractAnswerTextFromLlmText(result.text),
     provider: config.provider,
     model: config.model,
   };
@@ -1053,6 +1351,16 @@ async function answerQuestion(question, analysis) {
 
   const llmAnswer = sanitizeLlmAnswer(llmResult.answer, analysis, heuristicAnswer);
   if (!llmAnswer) {
+    if (llmResult.answerText) {
+      return {
+        ...heuristicAnswer,
+        answerText: llmResult.answerText,
+        strategy: "llm_text_with_heuristic_structure",
+        llmProvider: llmResult.provider,
+        llmModel: llmResult.model,
+      };
+    }
+
     return {
       ...heuristicAnswer,
       strategy: "heuristic_fallback",

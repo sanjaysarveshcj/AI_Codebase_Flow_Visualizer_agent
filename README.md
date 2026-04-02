@@ -1,11 +1,11 @@
-# 🚀 AI Codebase Flow Visualizer Agent
+#  AI Codebase Flow Visualizer Agent
 
 An intelligent **multi-agent AI system** that analyzes and visualizes the execution flow of a full-stack MERN application.
 It helps developers understand how frontend actions propagate through APIs, backend logic, and database operations — all in an interactive and queryable format.
 
 ---
 
-## 🧠 Problem Statement
+##  Problem Statement
 
 Modern MERN applications are complex:
 
@@ -13,13 +13,13 @@ Modern MERN applications are complex:
 * Logic is distributed across multiple files
 * Debugging and onboarding take significant time
 
-❗ Developers often struggle to answer:
+ Developers often struggle to answer:
 
 > “What happens when I click this button?”
 
 ---
 
-## 💡 Solution
+##  Solution
 
 This project introduces an **AI-powered codebase analyzer** that:
 
@@ -30,11 +30,11 @@ This project introduces an **AI-powered codebase analyzer** that:
 
 ---
 
-## 🏗️ System Architecture
+##  System Architecture
 
 The system follows a **multi-agent architecture**:
 
-### 🔹 Parser Agent
+###  Parser Agent
 
 * Extracts:
 
@@ -46,14 +46,14 @@ The system follows a **multi-agent architecture**:
 
 ---
 
-### 🔹 Flow Reasoning Agent
+###  Flow Reasoning Agent
 
 * Connects extracted components into logical execution paths
 * Understands how data flows across layers
 
 ---
 
-### 🔹 Graph Builder Agent
+###  Graph Builder Agent
 
 * Converts execution flow into a graph structure
 * Nodes: Components (UI, API, Controller, DB)
@@ -61,7 +61,7 @@ The system follows a **multi-agent architecture**:
 
 ---
 
-### 🔹 Visualization Agent
+###  Visualization Agent
 
 * Renders an **interactive graph UI**
 * Enables:
@@ -72,7 +72,7 @@ The system follows a **multi-agent architecture**:
 
 ---
 
-### 🔹 Query Agent (Key Feature)
+###  Query Agent (Key Feature)
 
 * Accepts natural language queries:
 
@@ -82,22 +82,22 @@ The system follows a **multi-agent architecture**:
 
 ---
 
-## 🔥 Key Features
+##  Key Features
 
-* ✅ Full-stack flow visualization (Frontend → Backend → DB)
-* ✅ Click-to-trace execution paths
-* ✅ Middleware detection (auth, error handlers)
-* ✅ Natural language querying
-* ✅ Explainable flow traces with confidence scoring
-* ✅ Multi-flow comparison insights from natural-language queries
-* ✅ Step-by-step path playback in graph UI
-* ✅ Auto documentation generation (Markdown, PDF, Swagger-like UI)
-* ✅ Interactive graph-based UI
-* ✅ Scalable for large codebases
+*  Full-stack flow visualization (Frontend → Backend → DB)
+*  Click-to-trace execution paths
+*  Middleware detection (auth, error handlers)
+*  Natural language querying
+*  Explainable flow traces with confidence scoring
+*  Multi-flow comparison insights from natural-language queries
+*  Step-by-step path playback in graph UI
+*  Auto documentation generation (Markdown, PDF, Swagger-like UI)
+*  Interactive graph-based UI
+*  Scalable for large codebases
 
 ---
 
-## ✅ Current Implementation Status (April 2026)
+##  Current Implementation Status (April 2026)
 
 ### Module 1: Backend Analyzer (Completed)
 
@@ -268,7 +268,7 @@ Implemented in this repository:
 
 ---
 
-## 🧪 Example Flow Output
+##  Example Flow Output
 
 ```
 Login Button
@@ -288,33 +288,33 @@ JWT Token Generated
 
 ---
 
-## 🧩 Tech Stack
+##  Tech Stack
 
-### 🖥️ Frontend
+###  Frontend
 
 * React.js
 * Vite
 * Custom CSS UI
 * React Flow (Graph Visualization)
 
-### ⚙️ Backend
+###  Backend
 
 * Node.js
 * Express.js
 
-### 🤖 AI Layer
+###  AI Layer
 
 * OpenAI / LLM APIs
 * LangChain / LangGraph / CrewAI
 
-### 📂 Code Parsing
+###  Code Parsing
 
 * Babel Parser (AST)
 * Tree-sitter (optional)
 
 ---
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 ai-flow-visualizer/
@@ -342,23 +342,23 @@ ai-flow-visualizer/
 
 ---
 
-## ⚡ Installation & Setup
+##  Installation & Setup
 
-### 1️⃣ Clone the Repository
+### 1️ Clone the Repository
 
 ```bash
 git clone https://github.com/your-username/ai-flow-visualizer.git
 cd ai-flow-visualizer
 ```
 
-### 2️⃣ Install Dependencies
+### 2️ Install Dependencies
 
 ```bash
 cd server && npm install
 cd ../client && npm install
 ```
 
-### 3️⃣ Run the Application
+### 3️ Run the Application
 
 ```bash
 # Terminal 1: start backend
@@ -370,7 +370,7 @@ cd client
 npm run dev
 ```
 
-### 4️⃣ Test with Sample Project
+### 4️ Test with Sample Project
 
 Use `sample-project/` as an analysis target:
 
@@ -383,7 +383,7 @@ curl -X POST http://localhost:4000/api/analyze \
 http://localhost:5173
 ```
 
-### 5️⃣ Generate Auto Documentation
+### 5️ Generate Auto Documentation
 
 Generate full docs package (Markdown + OpenAPI + Mermaid + PDF + Swagger HTML):
 
@@ -413,7 +413,7 @@ Note: Use an absolute `targetPath` to avoid path-resolution issues across differ
 
 ---
 
-## 🎯 MVP Roadmap
+##  MVP Roadmap
 
 ### Phase 1
 
@@ -433,13 +433,13 @@ Note: Use an absolute `targetPath` to avoid path-resolution issues across differ
 
 ### Phase 4 (Advanced)
 
-* ✅ Middleware tracking
-* ✅ Database interaction mapping
-* ✅ Dead code detection
+*  Middleware tracking
+*  Database interaction mapping
+*  Dead code detection
 
 ---
 
-## 🧠 Challenges
+##  Challenges
 
 * Handling dynamic routes (`/api/:id`)
 * Tracking indirect function calls
@@ -448,16 +448,16 @@ Note: Use an absolute `targetPath` to avoid path-resolution issues across differ
 
 ---
 
-## 🚀 Future Enhancements
+##  Future Enhancements
 
-* 🔍 Debugging assistant (trace errors automatically)
-* 🛡️ Security vulnerability detection
-* ⚡ Performance bottleneck analysis
-* 📊 Codebase analytics dashboard
+*  Debugging assistant (trace errors automatically)
+*  Security vulnerability detection
+*  Performance bottleneck analysis
+*  Codebase analytics dashboard
 
 ---
 
-## 📌 Use Cases
+##  Use Cases
 
 * Developer onboarding
 * Debugging complex flows
@@ -466,14 +466,14 @@ Note: Use an absolute `targetPath` to avoid path-resolution issues across differ
 
 ---
 
-## 🤝 Contributing
+##  Contributing
 
 Contributions are welcome!
 Feel free to fork the repo and submit pull requests.
 
 ---
 
-## ⭐ Acknowledgements
+##  Acknowledgements
 
 * OpenAI / LLM APIs
 * React Flow
@@ -481,11 +481,11 @@ Feel free to fork the repo and submit pull requests.
 
 ---
 
-## 📬 Contact
+##  Contact
 
 For questions or collaboration:
-📧 [sanjaysarveshcj@gmail.com](mailto:sanjaysarveshcj@gmail.com)
+ [sanjaysarveshcj@gmail.com](mailto:sanjaysarveshcj@gmail.com)
 
 ---
 
-**⭐ If you find this project useful, consider giving it a star!**
+** If you find this project useful, consider giving it a star!**

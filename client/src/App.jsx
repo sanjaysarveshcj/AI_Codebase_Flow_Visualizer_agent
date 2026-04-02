@@ -359,10 +359,16 @@ function renderAuthRoutesAnswer(answer, onHighlightFlow) {
 
 function renderFlowMatchAnswer(answer, onHighlightFlow) {
   const flowMatches = answer.data || [];
+  const intent = answer.intent || null;
 
   return (
     <div className="query-result-wrap">
       <h4>Matched Flows</h4>
+      {intent ? (
+        <p className="llm-answer-meta">
+          Intent detected: <strong>{intent.name}</strong> (confidence {intent.confidence ?? 0})
+        </p>
+      ) : null}
       <ul className="query-list">
         {flowMatches.map((flow) => (
           <li key={flow.id}>
@@ -606,6 +612,13 @@ function QueryResult({ answer, onHighlightFlow, onAskSuggestion }) {
   }
 
   const answerText = (answer.answerText || "").trim();
+  const answerMeta = [
+    answer.strategy ? `strategy: ${answer.strategy}` : "",
+    answer.llmProvider ? `provider: ${answer.llmProvider}` : "",
+    answer.llmModel ? `model: ${answer.llmModel}` : "",
+  ]
+    .filter(Boolean)
+    .join(" | ");
 
   return (
     <div className="query-answer-stack">
@@ -615,6 +628,9 @@ function QueryResult({ answer, onHighlightFlow, onAskSuggestion }) {
           <p className="llm-answer-text">{answerText}</p>
         </div>
       ) : null}
+      {/* {answerMeta ? (
+        <p className="llm-answer-meta query-answer-meta-standalone">{answerMeta}</p>
+      ) : null} */}
       {typedContent}
     </div>
   );
@@ -625,6 +641,11 @@ QueryResult.propTypes = {
     type: PropTypes.string,
     data: PropTypes.any,
     highlights: PropTypes.object,
+    intent: PropTypes.shape({
+      name: PropTypes.string,
+      confidence: PropTypes.number,
+      matchedTerms: PropTypes.arrayOf(PropTypes.string)
+    }),
     answerText: PropTypes.string,
     strategy: PropTypes.string,
     llmProvider: PropTypes.string,
